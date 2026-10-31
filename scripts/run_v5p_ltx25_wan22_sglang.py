@@ -213,8 +213,124 @@ def fast_gcs_sync_dir(idx: int, bucket: str, gcs_prefix: str, local_dir: Path) -
 
 def apply_v5p_sglang_patches(idx: int) -> None:
     base = Path("/usr/local/lib/python3.12/site-packages")
+    rt = base / "sglang/multimodal_gen/runtime"
 
-    # 1. Unlock optional TPU v5p Pallas Splash Attention when SGLANG_TPU_V5P_SPLASH=1
+    # 1. transformers/conversion_mapping.py: Gemma4Unified checkpoint key mapping (transformers 5.13 -> 5.19)
+    cm_path = base / "transformers/conversion_mapping.py"
+    cm_txt = cm_path.read_text()
+    gemma4_patch = """
+# TPU_GEMMA4_UNIFIED_MAPPING_PATCH
+register_checkpoint_conversion_mapping(
+    "Gemma4UnifiedModel",
+    [
+        WeightRenaming(r"^model\\.layers\\.", "language_model.layers."),
+        WeightRenaming(r"^model\\.embed_tokens\\.", "language_model.embed_tokens."),
+        WeightRenaming(r"^model\\.norm\\.", "language_model.norm."),
+        WeightRenaming(r"^vision_model\\.", "embed_vision."),
+        WeightRenaming(r"^multi_modal_projector\\.", "embed_vision.multimodal_embedder."),
+        WeightRenaming(r"^audio_projector\\.", "embed_audio."),
+    ],
+    overwrite=True,
+)
+register_checkpoint_conversion_mapping(
+    "Gemma4UnifiedForConditionalGeneration",
+    [
+        WeightRenaming(r"^model\\.layers\\.", "model.language_model.layers."),
+        WeightRenaming(r"^model\\.embed_tokens\\.", "model.language_model.embed_tokens."),
+        WeightRenaming(r"^model\\.norm\\.", "model.language_model.norm."),
+        WeightRenaming(r"^vision_model\\.", "model.embed_vision."),
+        WeightRenaming(r"^multi_modal_projector\\.", "model.embed_vision.multimodal_embedder."),
+        WeightRenaming(r"^audio_projector\\.", "model.embed_audio."),
+    ],
+    overwrite=True,
+)
+"""
+    if "TPU_GEMMA4_UNIFIED_MAPPING_PATCH" not in cm_txt:
+        cm_path.write_text(cm_txt + "\n" + gemma4_patch)
+
+    # 2. srt/layers/rotary_embedding/mrope.py: XLA-safe torch.where instead of step=3 slice_scatter
+    p6 = base / "sglang/srt/layers/rotary_embedding/mrope.py"
+    t6 = p6.read_text()
+    old6 = """def apply_interleaved_rope(x: torch.Tensor, mrope_section: list) -> torch.Tensor:
+    x_t = x[0].clone()
+    x_t[..., 1 : mrope_section[1] * 3 : 3] = x[1, ..., 1 : mrope_section[1] * 3 : 3]
+    x_t[..., 2 : mrope_section[2] * 3 : 3] = x[2, ..., 2 : mrope_section[2] * 3 : 3]
+    return x_t"""
+    new6 = """def apply_interleaved_rope(x: torch.Tensor, mrope_section: list) -> torch.Tensor:
+    num_pairs = x.shape[-1]
+    lim1 = min(3 * mrope_section[1], num_pairs)
+    lim2 = min(3 * mrope_section[2], num_pairs)
+    lanes = torch.arange(num_pairs, device=x.device, dtype=torch.int32)
+    m1 = ((lanes % 3) == 1) & (lanes < lim1)
+    m2 = ((lanes % 3) == 2) & (lanes < lim2)
+    out = torch.where(m1, x[1], x[0])
+    out = torch.where(m2, x[2], out)
+    return out"""
+    if new6 not in t6:
+        assert old6 in t6, "Missing mrope.py target"
+        p6.write_text(t6.replace(old6, new6, 1))
+
+    # 3. srt/layers/quantization/fp8_utils.py: TPU XLA torch._scaled_mm instead of CUDA Triton kernel
+    p7 = base / "sglang/srt/layers/quantization/fp8_utils.py"
+    t7 = p7.read_text()
+    old7 = """    # Note: we pad the input because torch._scaled_mm is more performant
+    # for matrices with batch dimension > 16.
+    # This could change in the future.
+    # We also don't pad when using torch.compile,
+    # as it breaks with dynamic shapes.
+    if pad_output is None:"""
+    new7 = """    if input.device.type == "tpu":
+        input_2d = input.reshape(-1, input.shape[-1])
+        output_shape = [*input.shape[:-1], weight.shape[1]]
+        if input_2d.dtype in (torch.float8_e4m3fn, torch.float8_e4m3fnuz):
+            qinput = input_2d
+            x_scale = (
+                input_scale.float()
+                if input_scale is not None
+                else torch.ones(1, device=input.device, dtype=torch.float32)
+            )
+            out_dtype = pre_quant_output_dtype or torch.bfloat16
+        elif input_scale is not None:
+            fmax = torch.finfo(torch.float8_e4m3fn).max
+            qinput = (input_2d.float() / input_scale.float()).clamp(-fmax, fmax).to(torch.float8_e4m3fn)
+            x_scale = input_scale.float()
+            out_dtype = input.dtype
+        else:
+            qinput, x_scale = input_to_float8(input_2d, dtype=torch.float8_e4m3fn)
+            out_dtype = input.dtype
+        if weight_scale.numel() == 1:
+            out = torch._scaled_mm(
+                qinput,
+                weight,
+                scale_a=x_scale.reshape(1),
+                scale_b=weight_scale.float().reshape(1),
+                out_dtype=out_dtype,
+                bias=bias,
+            )
+            return out.view(*output_shape)
+        out = torch._scaled_mm(
+            qinput,
+            weight,
+            scale_a=torch.ones(1, device=input.device, dtype=torch.float32),
+            scale_b=torch.ones(1, device=input.device, dtype=torch.float32),
+            out_dtype=torch.float32,
+        )
+        out = out * x_scale.reshape(-1, 1) * weight_scale.float().reshape(1, -1)
+        if bias is not None:
+            out = out + bias.float()
+        return out.to(out_dtype).view(*output_shape)
+
+    # Note: we pad the input because torch._scaled_mm is more performant
+    # for matrices with batch dimension > 16.
+    # This could change in the future.
+    # We also don't pad when using torch.compile,
+    # as it breaks with dynamic shapes.
+    if pad_output is None:"""
+    if 'if input.device.type == "tpu":' not in t7:
+        assert old7 in t7, "Missing fp8_utils.py target"
+        p7.write_text(t7.replace(old7, new7, 1))
+
+    # 4. sglang_tpu/multimodal_gen/tpu_splash_attn.py: SGLANG_TPU_V5P_SPLASH + VARLEN + DISABLE_SPLASH
     sp_path = base / "sglang_tpu/multimodal_gen/tpu_splash_attn.py"
     stxt = sp_path.read_text()
     old_chk = """        device_kind = get_pallas_tpu_device_kind()
@@ -249,16 +365,167 @@ def apply_v5p_sglang_patches(idx: int) -> None:
     vmem_budget = int(vmem_capacity_bytes * _VMEM_BUDGET_FRACTION)"""
     if old_blk in stxt:
         stxt = stxt.replace(old_blk, new_blk, 1)
+
+    old8a = "        self.use_splash = self.dropout == 0.0 and _check_splash_available()"
+    new8a = (
+        "        import os\n"
+        "        self.use_splash = (\n"
+        '            os.environ.get("SGLANG_TPU_DISABLE_SPLASH", "0") != "1"\n'
+        "            and self.dropout == 0.0\n"
+        "            and _check_splash_available()\n"
+        "        )"
+    )
+    if old8a in stxt and "SGLANG_TPU_DISABLE_SPLASH" not in stxt:
+        stxt = stxt.replace(old8a, new8a, 1)
+
+    target8 = "        return self._sdpa.forward_varlen("
+    repl8 = """        import os
+        if self.use_splash and os.environ.get("SGLANG_TPU_SPLASH_VARLEN", "0") == "1":
+            return super().forward_varlen(
+                query,
+                key,
+                value,
+                cu_seqlens=cu_seqlens,
+                max_seqlen=max_seqlen,
+                cu_seqlens_host=cu_seqlens_host,
+            )
+        return self._sdpa.forward_varlen("""
+    if target8 in stxt and "SGLANG_TPU_SPLASH_VARLEN" not in stxt:
+        stxt = stxt.replace(target8, repl8, 1)
     sp_path.write_text(stxt)
 
-    # 2. Allow unpinning LTX-2.5 default_sigmas when SGLANG_LTX25_CLEAR_DEFAULT_SIGMAS=1 (for 20-step dev sweep)
+    # 5. LTX-2.5 pipeline & stage TPU patches (pinned_sigmas, CPU Generator, stage2 renoise, DiffusionDecoder)
     ltx_cfg = base / "sglang/multimodal_gen/configs/pipeline_configs/ltx_2_5.py"
     ltxt = ltx_cfg.read_text()
-    old_sig = "default_factory=lambda: LTX25_DISTILLED_SIGMA_VALUES"
-    new_sig = 'default_factory=lambda: (None if __import__("os").environ.get("SGLANG_LTX25_CLEAR_DEFAULT_SIGMAS") == "1" else LTX25_DISTILLED_SIGMA_VALUES)'
-    if old_sig in ltxt and "SGLANG_LTX25_CLEAR_DEFAULT_SIGMAS" not in ltxt:
-        ltx_cfg.write_text(ltxt.replace(old_sig, new_sig, 1))
-    log(idx, "Applied SGLANG_TPU_V5P_SPLASH and SGLANG_LTX25_CLEAR_DEFAULT_SIGMAS hooks.")
+    old_sig0 = "default_factory=lambda: LTX25_DISTILLED_SIGMA_VALUES"
+    new_sig0 = 'default_factory=lambda: (None if __import__("os").environ.get("SGLANG_LTX25_CLEAR_DEFAULT_SIGMAS") == "1" else LTX25_DISTILLED_SIGMA_VALUES)'
+    if old_sig0 in ltxt and "SGLANG_LTX25_CLEAR_DEFAULT_SIGMAS" not in ltxt:
+        ltx_cfg.write_text(ltxt.replace(old_sig0, new_sig0, 1))
+
+    p_pipe = rt / "pipelines/ltx_2_pipeline.py"
+    t_pipe = p_pipe.read_text()
+    old_sig = "        pinned_sigmas = server_args.pipeline_config.default_sigmas\n        if pinned_sigmas:"
+    new_sig = "        pinned_sigmas = server_args.pipeline_config.default_sigmas\n        if pinned_sigmas and int(batch.num_inference_steps) == len(pinned_sigmas):"
+    if new_sig not in t_pipe:
+        assert old_sig in t_pipe, "Missing pinned_sigmas target in ltx_2_pipeline.py"
+        p_pipe.write_text(t_pipe.replace(old_sig, new_sig, 1))
+
+    p_dec_av = rt / "pipelines_core/stages/model_specific_stages/ltx_2/decoding_av.py"
+    t_dec_av = p_dec_av.read_text()
+    old_gen = "        generator = torch.Generator(device=latents.device).manual_seed(int(batch.seed))"
+    new_gen = '        generator = torch.Generator(device="cpu" if latents.device.type == "tpu" else latents.device).manual_seed(int(batch.seed))'
+    if new_gen not in t_dec_av:
+        assert old_gen in t_dec_av, "Missing Generator target in ltx_2/decoding_av.py"
+        p_dec_av.write_text(t_dec_av.replace(old_gen, new_gen, 1))
+
+    p_ddec = rt / "models/decoders/ltx_2_5_diffusion_decoder.py"
+    t_ddec = p_ddec.read_text()
+    for _src, _dst in [
+        (
+            "        x_t = torch.randn(\n            pixel_shape,\n            generator=generator,\n            device=hidden_states.device,\n            dtype=hidden_states.dtype,\n        )",
+            '        x_t = torch.randn(\n            pixel_shape,\n            generator=generator,\n            device="cpu" if hidden_states.device.type == "tpu" else hidden_states.device,\n            dtype=hidden_states.dtype,\n        ).to(hidden_states.device)',
+        ),
+        (
+            "                generator=generator,\n                device=hidden_states.device,\n                dtype=hidden_states.dtype,\n            )",
+            '                generator=generator,\n                device="cpu" if hidden_states.device.type == "tpu" else hidden_states.device,\n                dtype=hidden_states.dtype,\n            ).to(hidden_states.device)',
+        ),
+        (
+            "                return torch.randn(\n                    tile_shape,\n                    generator=generator,\n                    device=hidden_states.device,\n                    dtype=hidden_states.dtype,\n                )",
+            '                return torch.randn(\n                    tile_shape,\n                    generator=generator,\n                    device="cpu" if hidden_states.device.type == "tpu" else hidden_states.device,\n                    dtype=hidden_states.dtype,\n                ).to(hidden_states.device)',
+        ),
+    ]:
+        if _dst not in t_ddec and _src in t_ddec:
+            t_ddec = t_ddec.replace(_src, _dst, 1)
+    p_ddec.write_text(t_ddec)
+
+    p_den_av = rt / "pipelines_core/stages/model_specific_stages/ltx_2/denoising_av.py"
+    t_den_av = p_den_av.read_text()
+    old_den = """        device = reference_tensor.device
+        dtype = reference_tensor.dtype
+        generator = torch.Generator(device=device).manual_seed(seed)
+        video_shape = batch.extra.get("ltx2_stage1_packed_video_shape")
+        audio_shape = batch.extra.get("ltx2_stage1_packed_audio_shape")
+        if video_shape is not None:
+            _ = torch.randn(
+                tuple(video_shape), device=device, dtype=dtype, generator=generator
+            )
+        if audio_shape is not None:
+            _ = torch.randn(
+                tuple(audio_shape), device=device, dtype=dtype, generator=generator
+            )
+        return generator
+
+    @staticmethod
+    def _ltx2_renoise_like(
+        reference_tensor: torch.Tensor, generator: torch.Generator
+    ) -> torch.Tensor:
+        return torch.randn(
+            reference_tensor.shape,
+            device=reference_tensor.device,
+            dtype=reference_tensor.dtype,
+            generator=generator,
+        )"""
+    new_den = """        device = reference_tensor.device
+        gen_dev = "cpu" if device.type == "tpu" else device
+        dtype = reference_tensor.dtype
+        generator = torch.Generator(device=gen_dev).manual_seed(seed)
+        video_shape = batch.extra.get("ltx2_stage1_packed_video_shape")
+        audio_shape = batch.extra.get("ltx2_stage1_packed_audio_shape")
+        if video_shape is not None:
+            _ = torch.randn(
+                tuple(video_shape), device=gen_dev, dtype=dtype, generator=generator
+            )
+        if audio_shape is not None:
+            _ = torch.randn(
+                tuple(audio_shape), device=gen_dev, dtype=dtype, generator=generator
+            )
+        return generator
+
+    @staticmethod
+    def _ltx2_renoise_like(
+        reference_tensor: torch.Tensor, generator: torch.Generator
+    ) -> torch.Tensor:
+        gen_dev = "cpu" if reference_tensor.device.type == "tpu" else reference_tensor.device
+        return torch.randn(
+            reference_tensor.shape,
+            device=gen_dev,
+            dtype=reference_tensor.dtype,
+            generator=generator,
+        ).to(reference_tensor.device)"""
+    if new_den not in t_den_av:
+        assert old_den in t_den_av, "Missing renoise target in ltx_2/denoising_av.py"
+        p_den_av.write_text(t_den_av.replace(old_den, new_den, 1))
+
+    # 6. models/vaes/wanvae.py: disable spatial-parallel halo_exchange inside encode/_encode when use_parallel_encode=False
+    p_wvae = rt / "models/vaes/wanvae.py"
+    t_wvae = p_wvae.read_text()
+    old_wenc = """    @cached_vae_encode
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        if self.use_feature_cache:"""
+    new_wenc = """    @cached_vae_encode
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        from contextlib import nullcontext as _nullctx
+        with (_nullctx() if self.use_parallel_encode else disable_spatial_parallel_decode()):
+            return self._encode_impl_tpu_safe(x)
+
+    def _encode_impl_tpu_safe(self, x: torch.Tensor) -> torch.Tensor:
+        if self.use_feature_cache:"""
+    if "_encode_impl_tpu_safe" not in t_wvae:
+        assert old_wenc in t_wvae, "Missing WanVAE.encode target in wanvae.py"
+        t_wvae = t_wvae.replace(old_wenc, new_wenc, 1)
+    old_wenc2 = """    def _encode(self, x: torch.Tensor, first_frame=False) -> torch.Tensor:
+        with forward_context(first_frame_arg=first_frame):
+            out = self.encoder(x)"""
+    new_wenc2 = """    def _encode(self, x: torch.Tensor, first_frame=False) -> torch.Tensor:
+        from contextlib import nullcontext as _nullctx
+        with (_nullctx() if self.use_parallel_encode else disable_spatial_parallel_decode()):
+            with forward_context(first_frame_arg=first_frame):
+                out = self.encoder(x)"""
+    if new_wenc2 not in t_wvae and old_wenc2 in t_wvae:
+        t_wvae = t_wvae.replace(old_wenc2, new_wenc2, 1)
+    p_wvae.write_text(t_wvae)
+
+    log(idx, "Applied all SGLang v5p patches (Gemma4Unified mapping, LTX-2.5 TPU, FP8 _scaled_mm, WanVAE encode guard, v5p Splash).")
 
 
 def setup_single_host_metadata_hook(idx: int, bucket: str) -> None:
@@ -271,7 +538,7 @@ def generate_reference_images(out_dir: Path) -> dict[str, str]:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     res: dict[str, str] = {}
-    for size in ("960x544", "1280x704", "832x480", "1280x720", "720x1280"):
+    for size in ("960x544", "1280x704", "1920x1088", "832x480", "1280x720", "720x1280"):
         w, h = (int(x) for x in size.split("x"))
         p = out_dir / f"ref_{size}.png"
         img = Image.new("RGB", (w, h), (30, 52, 82))

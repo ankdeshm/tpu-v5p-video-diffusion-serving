@@ -1,0 +1,26 @@
+[
+  {
+    "family": "Wan2.2-I2V-A14B",
+    "config": "wan22_i2v_sglang_bf16_u4",
+    "engine": "sglang-torchtpu",
+    "task": "i2v",
+    "precision": "BF16",
+    "chips": 4,
+    "parallelism": "U=4",
+    "attn_mode": "XLA Fused SDPA",
+    "boot_s": 84.17,
+    "workload": "480p (832x480) 5s 81f (4-step fast)",
+    "output_res": "832x480",
+    "num_frames": 81,
+    "duration_s": 5.0,
+    "steps": 4,
+    "cold_compile_s": 2400.339,
+    "warm_median_e2e_s": null,
+    "ms_per_step": null,
+    "rpm": 0.0,
+    "video_sec_per_wall_sec": 0.0,
+    "sample_mp4_bytes": null,
+    "ok": "0/3",
+    "error": "timeout"
+  }
+]

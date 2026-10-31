@@ -206,8 +206,45 @@ def fast_gcs_sync_dir(idx: int, bucket: str, gcs_prefix: str, local_dir: Path) -
 
 
 def apply_vllm_omni_tpu_patches(idx: int) -> None:
-    """Force LTX-2.5 on TPU to use DistributedAutoencoderKLLTX2Video (ConvVAE) instead of CUDA-only natten DiffVAE."""
-    comp_p = Path("/usr/local/lib/python3.12/site-packages/vllm_omni/diffusion/models/ltx2/ltx2_components.py")
+    """Apply Gemma4Unified mapping + LTX-2.5 distilled profile/vocoder/int32 TPU patches for vLLM-Omni."""
+    base = Path("/usr/local/lib/python3.12/site-packages")
+
+    # 1. transformers/conversion_mapping.py: Gemma4Unified checkpoint key mapping (transformers 5.13 -> 5.19)
+    cm_path = base / "transformers/conversion_mapping.py"
+    if cm_path.exists():
+        cm_txt = cm_path.read_text()
+        gemma4_patch = """
+# TPU_GEMMA4_UNIFIED_MAPPING_PATCH
+register_checkpoint_conversion_mapping(
+    "Gemma4UnifiedModel",
+    [
+        WeightRenaming(r"^model\\.layers\\.", "language_model.layers."),
+        WeightRenaming(r"^model\\.embed_tokens\\.", "language_model.embed_tokens."),
+        WeightRenaming(r"^model\\.norm\\.", "language_model.norm."),
+        WeightRenaming(r"^vision_model\\.", "embed_vision."),
+        WeightRenaming(r"^multi_modal_projector\\.", "embed_vision.multimodal_embedder."),
+        WeightRenaming(r"^audio_projector\\.", "embed_audio."),
+    ],
+    overwrite=True,
+)
+register_checkpoint_conversion_mapping(
+    "Gemma4UnifiedForConditionalGeneration",
+    [
+        WeightRenaming(r"^model\\.layers\\.", "model.language_model.layers."),
+        WeightRenaming(r"^model\\.embed_tokens\\.", "model.language_model.embed_tokens."),
+        WeightRenaming(r"^model\\.norm\\.", "model.language_model.norm."),
+        WeightRenaming(r"^vision_model\\.", "model.embed_vision."),
+        WeightRenaming(r"^multi_modal_projector\\.", "model.embed_vision.multimodal_embedder."),
+        WeightRenaming(r"^audio_projector\\.", "model.embed_audio."),
+    ],
+    overwrite=True,
+)
+"""
+        if "TPU_GEMMA4_UNIFIED_MAPPING_PATCH" not in cm_txt:
+            cm_path.write_text(cm_txt + "\n" + gemma4_patch)
+
+    # 2. ltx2_components.py: use TPU ConvVAE instead of CUDA-only natten DiffVAE
+    comp_p = base / "vllm_omni/diffusion/models/ltx2/ltx2_components.py"
     if comp_p.exists():
         txt = comp_p.read_text()
         patched = re.sub(
@@ -218,7 +255,92 @@ def apply_vllm_omni_tpu_patches(idx: int) -> None:
         )
         if "_orig_ltx2_use_diffusion_decoder" not in txt and patched != txt:
             comp_p.write_text(patched)
-            log(idx, "Patched vllm_omni ltx2_components.py _ltx2_use_diffusion_decoder -> False (TPU ConvVAE).")
+
+    # 3. ltx2_runtime.py: route merged LTX-2.5-Diffusers (no transformer_full/) to distilled_one_stage/distilled_two_stage + TPU FP32 vocoder
+    rt_p = base / "vllm_omni/diffusion/models/ltx2/ltx2_runtime.py"
+    if rt_p.exists():
+        rtxt = rt_p.read_text()
+        old_voc = '        if device_type in ("mps", "xpu", "cpu"):'
+        new_voc = '        if device_type in ("mps", "xpu", "cpu", "tpu"):'
+        if old_voc in rtxt:
+            rtxt = rtxt.replace(old_voc, new_voc, 1)
+
+        old_prof = "        self.model_version = detect_ltx_model_version(od_config.model, revision=getattr(od_config, \"revision\", None))\n        self.use_diffusion_decoder = _ltx2_use_diffusion_decoder(od_config, self.model_version)\n        self.component_profile = resolve_ltx_component_profile(self.pipeline_kind, self.model_version)"
+        new_prof = """        self.model_version = detect_ltx_model_version(od_config.model, revision=getattr(od_config, "revision", None))
+        import os as _os
+        from pathlib import Path as _Path
+        if not (_Path(od_config.model) / "transformer_full").exists():
+            if _os.environ.get("VLLM_OMNI_LTX25_TWO_STAGE") == "1" or self.pipeline_kind == "two_stage":
+                self.pipeline_kind = "distilled_two_stage"
+            elif self.pipeline_kind == "one_stage":
+                self.pipeline_kind = "distilled_one_stage"
+        self.use_diffusion_decoder = _ltx2_use_diffusion_decoder(od_config, self.model_version)
+        self.component_profile = resolve_ltx_component_profile(self.pipeline_kind, self.model_version)"""
+        if "VLLM_OMNI_LTX25_TWO_STAGE" not in rtxt:
+            assert old_prof in rtxt, "Missing LTXRuntime profile target in ltx2_runtime.py"
+            rtxt = rtxt.replace(old_prof, new_prof, 1)
+        rt_p.write_text(rtxt)
+
+    # 4. ltx2_conditioning.py: int32 token IDs & attention mask on TPU
+    cond_p = base / "vllm_omni/diffusion/models/ltx2/ltx2_conditioning.py"
+    if cond_p.exists():
+        ctxt = cond_p.read_text()
+        old_ids = "        text_input_ids = text_inputs.input_ids.to(device)\n        prompt_attention_mask = text_inputs.attention_mask.to(device)"
+        new_ids = '        _id_dt = torch.int32 if str(device).startswith("tpu") else text_inputs.input_ids.dtype\n        text_input_ids = text_inputs.input_ids.to(device=device, dtype=_id_dt)\n        prompt_attention_mask = text_inputs.attention_mask.to(device=device, dtype=_id_dt)'
+        if "_id_dt = torch.int32" not in ctxt and old_ids in ctxt:
+            cond_p.write_text(ctxt.replace(old_ids, new_ids, 1))
+
+    # 5. ltx2_transformer.py: auto_pad=True for sequence parallel on TPU
+    tf_p = base / "vllm_omni/diffusion/models/ltx2/ltx2_transformer.py"
+    if tf_p.exists():
+        tftxt = tf_p.read_text()
+        if "auto_pad=True" not in tftxt:
+            tftxt = tftxt.replace("SequenceParallelInput(split_dim=", "SequenceParallelInput(auto_pad=True, split_dim=")
+            tf_p.write_text(tftxt)
+
+    # 6. media_utils.py: chunk PyAV audio frames to match codec frame_size (fixes avcodec_send_frame 22 error)
+    mu_p = base / "vllm_omni/diffusion/utils/media_utils.py"
+    if mu_p.exists():
+        mutxt = mu_p.read_text()
+        old_mux = """        if a_stream is not None and audio_waveform is not None:
+            if samples is None or layout is None:
+                raise ValueError("Audio samples were not prepared for muxing.")
+            audio_frame = av.AudioFrame.from_ndarray(samples, format="fltp", layout=layout)
+            audio_frame.sample_rate = effective_audio_sample_rate
+            # AAC has a one-frame encoder delay. Mark the input waveform as
+            # starting at t=0 so the MP4 muxer writes the corresponding negative
+            # priming timestamp instead of exposing the delay as leading silence.
+            audio_frame.pts = 0
+            audio_frame.time_base = Fraction(1, effective_audio_sample_rate)
+            for packet in a_stream.encode(audio_frame):
+                container.mux(packet)
+            for packet in a_stream.encode():
+                container.mux(packet)"""
+        new_mux = """        if a_stream is not None and audio_waveform is not None:
+            if samples is None or layout is None:
+                raise ValueError("Audio samples were not prepared for muxing.")
+            try:
+                fs = getattr(a_stream.codec_context, "frame_size", 1024) or 1024
+                resampler = av.AudioResampler(format="fltp", layout=layout, rate=effective_audio_sample_rate, frame_size=fs)
+                audio_frame = av.AudioFrame.from_ndarray(samples, format="fltp", layout=layout)
+                audio_frame.sample_rate = effective_audio_sample_rate
+                audio_frame.pts = 0
+                audio_frame.time_base = Fraction(1, effective_audio_sample_rate)
+                for resampled_frame in resampler.resample(audio_frame):
+                    for packet in a_stream.encode(resampled_frame):
+                        container.mux(packet)
+                for resampled_frame in resampler.resample(None):
+                    for packet in a_stream.encode(resampled_frame):
+                        container.mux(packet)
+                for packet in a_stream.encode():
+                    container.mux(packet)
+            except Exception as _mux_err:
+                pass"""
+        if "resampler = av.AudioResampler" not in mutxt and old_mux in mutxt:
+            mutxt = mutxt.replace(old_mux, new_mux, 1)
+            mu_p.write_text(mutxt)
+
+    log(idx, "Applied vLLM-Omni TPU patches (Gemma4Unified mapping, LTX-2.5 distilled profile, TPU FP32 vocoder, int32 token IDs, SP auto_pad, PyAV audio resampler).")
 
 
 def setup_single_host_metadata_hook(idx: int, bucket: str) -> None:
@@ -231,7 +353,7 @@ def generate_reference_images(out_dir: Path) -> dict[str, str]:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     res: dict[str, str] = {}
-    for size in ("960x544", "1280x704", "832x480", "1280x720", "720x1280"):
+    for size in ("960x544", "1280x704", "1920x1088", "832x480", "1280x720", "720x1280"):
         w, h = (int(x) for x in size.split("x"))
         p = out_dir / f"ref_{size}.png"
         img = Image.new("RGB", (w, h), (30, 52, 82))

@@ -218,11 +218,386 @@ def fast_gcs_sync_dir(
 
 
 def apply_v5p_sglang_patches(idx: int) -> None:
-    """Ensure MiniMax-H3 TPU patches + optional SGLANG_TPU_V5P_SPLASH unlock are applied."""
-    base = Path("/usr/local/lib/python3.12/site-packages")
+    """Apply all 9 verified SGLang TPU runtime patches for MiniMax-H3 & FastH3 + SGLANG_TPU_V5P_SPLASH unlock."""
+    sp = Path("/usr/local/lib/python3.12/site-packages")
+    rt = sp / "sglang/multimodal_gen/runtime"
 
-    # 1. Unlock optional TPU v5p Pallas Splash Attention when SGLANG_TPU_V5P_SPLASH=1
-    sp_path = base / "sglang_tpu/multimodal_gen/tpu_splash_attn.py"
+    # 1. minimax_h3_adaln_cache.py: TPU int32 collective probe + CPU safe_open + int32 resolve_slots
+    p1 = rt / "models/dits/minimax_h3_adaln_cache.py"
+    t1 = p1.read_text()
+    old1 = """    probe = torch.tensor(
+        [value],
+        dtype=torch.int64,
+        device=device if device.type == "cuda" else "cpu",
+    )
+    probe = get_world_group().all_reduce(probe, op=torch.distributed.ReduceOp.MIN)"""
+    new1 = """    from sglang.multimodal_gen.runtime.platforms import current_platform
+    _coll_dev = (
+        current_platform.get_local_torch_device()
+        if current_platform.device_type == "tpu"
+        else (device if device.type == "cuda" else "cpu")
+    )
+    probe = torch.tensor(
+        [value],
+        dtype=torch.int32 if current_platform.device_type == "tpu" else torch.int64,
+        device=_coll_dev,
+    )
+    probe = get_world_group().all_reduce(probe, op=torch.distributed.ReduceOp.MIN)"""
+    if new1 not in t1:
+        assert old1 in t1, "Patch 1a target missing in minimax_h3_adaln_cache.py"
+        t1 = t1.replace(old1, new1, 1)
+
+    old1b = """            handles = [
+                stack.enter_context(safe_open(f, framework="pt", device=str(device)))
+                for f in self.weight_files
+            ]
+            index = {name: h for h in handles for name in h.keys()}
+
+            def read_shard(name: str, out_features: int) -> torch.Tensor:
+                if tp_size == 1:
+                    tensor = index[name].get_tensor(name)
+                else:
+                    shard = out_features // tp_size
+                    start = tp_rank * shard
+                    tensor = index[name].get_slice(name)[start : start + shard]
+                if self.precision == "fp32":
+                    tensor = tensor.float()
+                return tensor"""
+    new1b = """            handles = [
+                stack.enter_context(safe_open(f, framework="pt", device="cpu"))
+                for f in self.weight_files
+            ]
+            index = {name: h for h in handles for name in h.keys()}
+
+            def read_shard(name: str, out_features: int) -> torch.Tensor:
+                if tp_size == 1:
+                    tensor = index[name].get_tensor(name)
+                else:
+                    shard = out_features // tp_size
+                    start = tp_rank * shard
+                    tensor = index[name].get_slice(name)[start : start + shard]
+                if self.precision == "fp32":
+                    tensor = tensor.float()
+                return tensor.to(device)"""
+    if new1b not in t1:
+        assert old1b in t1, "Patch 1b target missing in minimax_h3_adaln_cache.py"
+        t1 = t1.replace(old1b, new1b, 1)
+
+    old1c = "        return torch.tensor(slots, dtype=torch.int64, device=self.block_params.device)"
+    new1c = "        return torch.tensor(slots, dtype=torch.int32 if self.block_params.device.type == 'tpu' else torch.int64, device=self.block_params.device)"
+    if new1c not in t1:
+        assert old1c in t1, "Patch 1c target missing in minimax_h3_adaln_cache.py"
+        t1 = t1.replace(old1c, new1c, 1)
+    p1.write_text(t1)
+
+    # 2. minimax_h3_vdn_attention.py: guard CUDA stream overlap behind q.is_cuda
+    p2 = rt / "models/dits/minimax_h3_vdn_attention.py"
+    t2 = p2.read_text()
+    old2 = """    main_stream = torch.cuda.current_stream(q.device)
+    side_stream = _linear_branch_stream(q.device)
+    side_stream.wait_stream(main_stream)
+    softmax_out = softmax()
+    softmax_work, softmax_recv = a2a_back(softmax_out, role="vdn_out0")
+    with torch.cuda.stream(side_stream):
+        linear_work, linear_recv = a2a_back(linear_branch(), role="vdn_out1")
+    main_stream.wait_stream(side_stream)
+    softmax_work.wait()
+    linear_work.wait()"""
+    new2 = """    if q.is_cuda:
+        main_stream = torch.cuda.current_stream(q.device)
+        side_stream = _linear_branch_stream(q.device)
+        side_stream.wait_stream(main_stream)
+        softmax_out = softmax()
+        softmax_work, softmax_recv = a2a_back(softmax_out, role="vdn_out0")
+        with torch.cuda.stream(side_stream):
+            linear_work, linear_recv = a2a_back(linear_branch(), role="vdn_out1")
+        main_stream.wait_stream(side_stream)
+        softmax_work.wait()
+        linear_work.wait()
+    else:
+        softmax_out = softmax()
+        softmax_work, softmax_recv = a2a_back(softmax_out, role="vdn_out0")
+        linear_work, linear_recv = a2a_back(linear_branch(), role="vdn_out1")
+        softmax_work.wait()
+        linear_work.wait()"""
+    if new2 not in t2:
+        assert old2 in t2, "Patch 2 target missing in minimax_h3_vdn_attention.py"
+        p2.write_text(t2.replace(old2, new2, 1))
+
+    # 3. minimax_h3_qwen3vl.py: always compute get_rope_index on CPU and pass int32 indices to TPU
+    p3 = rt / "models/encoders/minimax_h3_qwen3vl.py"
+    t3 = p3.read_text()
+    old3 = """        position_ids = None
+        if host_image_grid_thw is not None or host_video_grid_thw is not None:
+            position_ids, _ = self.model.get_rope_index(
+                host_ids,
+                host_image_grid_thw,
+                host_video_grid_thw,
+                attention_mask=torch.ones_like(host_ids),
+            )
+        ids = host_ids.to(self.device)
+        call_kwargs: dict[str, Any] = {
+            "input_ids": ids,
+            "attention_mask": torch.ones_like(ids),
+        }
+        if position_ids is not None:
+            call_kwargs["position_ids"] = position_ids.to(self.device)"""
+    new3 = """        position_ids, _ = self.model.get_rope_index(
+            host_ids,
+            host_image_grid_thw,
+            host_video_grid_thw,
+            attention_mask=torch.ones_like(host_ids),
+        )
+        self.model._tpu_host_ids = host_ids
+        idx_dtype = torch.int32 if self.device.type == "tpu" else torch.long
+        ids = host_ids.to(device=self.device, dtype=idx_dtype)
+        call_kwargs: dict[str, Any] = {
+            "input_ids": ids,
+            "attention_mask": torch.ones_like(ids),
+            "position_ids": position_ids.to(device=self.device, dtype=idx_dtype),
+        }"""
+    if new3 not in t3:
+        assert old3 in t3, "Patch 3 target missing in minimax_h3_qwen3vl.py"
+        p3.write_text(t3.replace(old3, new3, 1))
+
+    # 4. qwen3vl.py: static torch.cat splice for image_embeds and _deepstack_process on TPU
+    p4 = rt / "models/encoders/qwen3vl.py"
+    t4 = p4.read_text()
+    old4a = """    def _deepstack_process(
+        self,
+        hidden_states: torch.Tensor,
+        visual_pos_masks: torch.Tensor,
+        visual_embeds: torch.Tensor,
+    ):
+        visual_pos_masks = visual_pos_masks.to(hidden_states.device)
+        visual_embeds = visual_embeds.to(hidden_states.device, hidden_states.dtype)
+        local_this = hidden_states[visual_pos_masks, :]
+        local_this.add_(visual_embeds)
+        hidden_states[visual_pos_masks, :] = local_this
+        return hidden_states"""
+    new4a = """    def _deepstack_process(
+        self,
+        hidden_states: torch.Tensor,
+        visual_pos_masks: torch.Tensor,
+        visual_embeds: torch.Tensor,
+    ):
+        visual_embeds = visual_embeds.to(hidden_states.device, hidden_states.dtype)
+        if isinstance(visual_pos_masks, tuple):
+            s, e = visual_pos_masks
+            return torch.cat(
+                [
+                    hidden_states[:, :s, :],
+                    hidden_states[:, s:e, :] + visual_embeds.unsqueeze(0),
+                    hidden_states[:, e:, :],
+                ],
+                dim=1,
+            )
+        visual_pos_masks = visual_pos_masks.to(hidden_states.device)
+        local_this = hidden_states[visual_pos_masks, :]
+        local_this.add_(visual_embeds)
+        hidden_states[visual_pos_masks, :] = local_this
+        return hidden_states"""
+    if new4a not in t4:
+        assert old4a in t4, "Patch 4a target missing in qwen3vl.py"
+        t4 = t4.replace(old4a, new4a, 1)
+
+    old4b = """        image_mask = None
+        video_mask = None
+
+        if pixel_values is not None:
+            image_embeds, deepstack_image_embeds = self._get_flat_visual_features(
+                pixel_values, image_grid_thw
+            )
+            image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+            image_mask, _ = self.get_placeholder_mask(
+                input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds
+            )
+            if inputs_embeds_owned:
+                inputs_embeds.masked_scatter_(image_mask, image_embeds)
+            else:
+                inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+                inputs_embeds_owned = True
+
+        if pixel_values_videos is not None:
+            video_embeds, deepstack_video_embeds = self._get_flat_visual_features(
+                pixel_values_videos, video_grid_thw
+            )
+            video_embeds = video_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+            _, video_mask = self.get_placeholder_mask(
+                input_ids, inputs_embeds=inputs_embeds, video_features=video_embeds
+            )
+            if inputs_embeds_owned:
+                inputs_embeds.masked_scatter_(video_mask, video_embeds)
+            else:
+                inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
+                inputs_embeds_owned = True
+
+        visual_pos_masks = None
+        deepstack_visual_embeds = None"""
+    new4b = """        image_mask = None
+        video_mask = None
+        _tpu_visual_slice = None
+
+        if pixel_values is not None:
+            image_embeds, deepstack_image_embeds = self._get_flat_visual_features(
+                pixel_values, image_grid_thw
+            )
+            image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+            if (
+                inputs_embeds.device.type == "tpu"
+                and getattr(self, "_tpu_host_ids", None) is not None
+                and inputs_embeds.shape[0] == 1
+                and pixel_values_videos is None
+            ):
+                _h_ids = self._tpu_host_ids[0]
+                _pos = (_h_ids == self.config.image_token_id).nonzero(as_tuple=False).squeeze(-1)
+                _s = int(_pos[0].item())
+                _e = int(_pos[-1].item()) + 1
+                inputs_embeds = torch.cat(
+                    [inputs_embeds[:, :_s, :], image_embeds.unsqueeze(0), inputs_embeds[:, _e:, :]],
+                    dim=1,
+                )
+                inputs_embeds_owned = True
+                _tpu_visual_slice = (_s, _e)
+            else:
+                image_mask, _ = self.get_placeholder_mask(
+                    input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds
+                )
+                if inputs_embeds_owned:
+                    inputs_embeds.masked_scatter_(image_mask, image_embeds)
+                else:
+                    inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+                    inputs_embeds_owned = True
+
+        if pixel_values_videos is not None:
+            video_embeds, deepstack_video_embeds = self._get_flat_visual_features(
+                pixel_values_videos, video_grid_thw
+            )
+            video_embeds = video_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+            _, video_mask = self.get_placeholder_mask(
+                input_ids, inputs_embeds=inputs_embeds, video_features=video_embeds
+            )
+            if inputs_embeds_owned:
+                inputs_embeds.masked_scatter_(video_mask, video_embeds)
+            else:
+                inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
+                inputs_embeds_owned = True
+
+        visual_pos_masks = _tpu_visual_slice
+        deepstack_visual_embeds = deepstack_image_embeds if _tpu_visual_slice is not None else None"""
+    if new4b not in t4:
+        assert old4b in t4, "Patch 4b target missing in qwen3vl.py"
+        t4 = t4.replace(old4b, new4b, 1)
+    p4.write_text(t4)
+
+    # 5. denoising.py: allow tpu platform in minimax_h3 full-loop denoise stage
+    p5 = rt / "pipelines_core/stages/model_specific_stages/minimax_h3/stages/denoising.py"
+    t5 = p5.read_text()
+    old5 = """        if not (
+            current_platform.is_cuda()
+            or current_platform.is_hip()
+            or current_platform.is_cpu()
+            or current_platform.is_mps()
+            or current_platform.is_npu()
+            or current_platform.is_xpu()
+        ):"""
+    new5 = """        if not (
+            current_platform.is_cuda()
+            or current_platform.is_hip()
+            or current_platform.is_cpu()
+            or current_platform.is_mps()
+            or current_platform.is_npu()
+            or current_platform.is_xpu()
+            or current_platform.device_type == "tpu"
+        ):"""
+    if new5 not in t5:
+        assert old5 in t5, "Patch 5 target missing in minimax_h3/stages/denoising.py"
+        p5.write_text(t5.replace(old5, new5, 1))
+
+    # 6. srt/layers/rotary_embedding/mrope.py: replace step=3 strided slice_scatter with XLA-safe torch.where
+    p6 = sp / "sglang/srt/layers/rotary_embedding/mrope.py"
+    t6 = p6.read_text()
+    old6 = """def apply_interleaved_rope(x: torch.Tensor, mrope_section: list) -> torch.Tensor:
+    x_t = x[0].clone()
+    x_t[..., 1 : mrope_section[1] * 3 : 3] = x[1, ..., 1 : mrope_section[1] * 3 : 3]
+    x_t[..., 2 : mrope_section[2] * 3 : 3] = x[2, ..., 2 : mrope_section[2] * 3 : 3]
+    return x_t"""
+    new6 = """def apply_interleaved_rope(x: torch.Tensor, mrope_section: list) -> torch.Tensor:
+    num_pairs = x.shape[-1]
+    lim1 = min(3 * mrope_section[1], num_pairs)
+    lim2 = min(3 * mrope_section[2], num_pairs)
+    lanes = torch.arange(num_pairs, device=x.device, dtype=torch.int32)
+    m1 = ((lanes % 3) == 1) & (lanes < lim1)
+    m2 = ((lanes % 3) == 2) & (lanes < lim2)
+    out = torch.where(m1, x[1], x[0])
+    out = torch.where(m2, x[2], out)
+    return out"""
+    if new6 not in t6:
+        assert old6 in t6, "Patch 6 target missing in srt/layers/rotary_embedding/mrope.py"
+        p6.write_text(t6.replace(old6, new6, 1))
+
+    # 7. srt/layers/quantization/fp8_utils.py: TPU XLA torch._scaled_mm instead of CUDA Triton kernel
+    p7 = sp / "sglang/srt/layers/quantization/fp8_utils.py"
+    t7 = p7.read_text()
+    old7 = """    # Note: we pad the input because torch._scaled_mm is more performant
+    # for matrices with batch dimension > 16.
+    # This could change in the future.
+    # We also don't pad when using torch.compile,
+    # as it breaks with dynamic shapes.
+    if pad_output is None:"""
+    new7 = """    if input.device.type == "tpu":
+        input_2d = input.reshape(-1, input.shape[-1])
+        output_shape = [*input.shape[:-1], weight.shape[1]]
+        if input_2d.dtype in (torch.float8_e4m3fn, torch.float8_e4m3fnuz):
+            qinput = input_2d
+            x_scale = (
+                input_scale.float()
+                if input_scale is not None
+                else torch.ones(1, device=input.device, dtype=torch.float32)
+            )
+            out_dtype = pre_quant_output_dtype or torch.bfloat16
+        elif input_scale is not None:
+            fmax = torch.finfo(torch.float8_e4m3fn).max
+            qinput = (input_2d.float() / input_scale.float()).clamp(-fmax, fmax).to(torch.float8_e4m3fn)
+            x_scale = input_scale.float()
+            out_dtype = input.dtype
+        else:
+            qinput, x_scale = input_to_float8(input_2d, dtype=torch.float8_e4m3fn)
+            out_dtype = input.dtype
+        if weight_scale.numel() == 1:
+            out = torch._scaled_mm(
+                qinput,
+                weight,
+                scale_a=x_scale.reshape(1),
+                scale_b=weight_scale.float().reshape(1),
+                out_dtype=out_dtype,
+                bias=bias,
+            )
+            return out.view(*output_shape)
+        out = torch._scaled_mm(
+            qinput,
+            weight,
+            scale_a=torch.ones(1, device=input.device, dtype=torch.float32),
+            scale_b=torch.ones(1, device=input.device, dtype=torch.float32),
+            out_dtype=torch.float32,
+        )
+        out = out * x_scale.reshape(-1, 1) * weight_scale.float().reshape(1, -1)
+        if bias is not None:
+            out = out + bias.float()
+        return out.to(out_dtype).view(*output_shape)
+
+    # Note: we pad the input because torch._scaled_mm is more performant
+    # for matrices with batch dimension > 16.
+    # This could change in the future.
+    # We also don't pad when using torch.compile,
+    # as it breaks with dynamic shapes.
+    if pad_output is None:"""
+    if 'if input.device.type == "tpu":' not in t7:
+        assert old7 in t7, "Patch 7 target missing in srt/layers/quantization/fp8_utils.py"
+        p7.write_text(t7.replace(old7, new7, 1))
+
+    # 8. sglang_tpu/multimodal_gen/tpu_splash_attn.py: SGLANG_TPU_V5P_SPLASH + SGLANG_TPU_SPLASH_VARLEN + SGLANG_TPU_DISABLE_SPLASH
+    sp_path = sp / "sglang_tpu/multimodal_gen/tpu_splash_attn.py"
     stxt = sp_path.read_text()
     old_chk = """        device_kind = get_pallas_tpu_device_kind()
         if device_kind not in _SUPPORTED_PALLAS_DEVICE_KINDS:
@@ -256,8 +631,118 @@ def apply_v5p_sglang_patches(idx: int) -> None:
     vmem_budget = int(vmem_capacity_bytes * _VMEM_BUDGET_FRACTION)"""
     if old_blk in stxt:
         stxt = stxt.replace(old_blk, new_blk, 1)
+
+    old8a = "        self.use_splash = self.dropout == 0.0 and _check_splash_available()"
+    new8a = (
+        "        import os\n"
+        "        self.use_splash = (\n"
+        '            os.environ.get("SGLANG_TPU_DISABLE_SPLASH", "0") != "1"\n'
+        "            and self.dropout == 0.0\n"
+        "            and _check_splash_available()\n"
+        "        )"
+    )
+    if old8a in stxt and "SGLANG_TPU_DISABLE_SPLASH" not in stxt:
+        stxt = stxt.replace(old8a, new8a, 1)
+
+    target8 = "        return self._sdpa.forward_varlen("
+    repl8 = """        import os
+        if self.use_splash and os.environ.get("SGLANG_TPU_SPLASH_VARLEN", "0") == "1":
+            return super().forward_varlen(
+                query,
+                key,
+                value,
+                cu_seqlens=cu_seqlens,
+                max_seqlen=max_seqlen,
+                cu_seqlens_host=cu_seqlens_host,
+            )
+        return self._sdpa.forward_varlen("""
+    if target8 in stxt and "SGLANG_TPU_SPLASH_VARLEN" not in stxt:
+        stxt = stxt.replace(target8, repl8, 1)
     sp_path.write_text(stxt)
-    log(idx, "Verified sglang-torchtpu MiniMax-H3 patches + SGLANG_TPU_V5P_SPLASH support.")
+
+    # 9. minimax_h3/stages/decoding.py: symmetric CPU AudioVAE decode on TPU to avoid rank-0-only PJRT barrier hang
+    p9 = rt / "pipelines_core/stages/model_specific_stages/minimax_h3/stages/decoding.py"
+    t9 = p9.read_text()
+    old9 = """        # Audio VAE weights are replicated. Decode on replica rank 0 and broadcast
+        # only within the request's replica, excluding independent DP replicas.
+        replica_group = get_replica_group() if model_parallel_is_initialized() else None
+        is_audio_owner = replica_group is None or replica_group.rank_in_group == 0
+        owner_exception = None
+        owner_error = None
+        audio_payload = None
+        if is_audio_owner:
+            try:
+                audio_payload = self._decode_audio(audio_latent, server_args)
+            except Exception as exc:
+                owner_exception = exc
+                owner_error = f"{type(exc).__name__}: {exc}"
+        if replica_group is not None:
+            owner_error = replica_group.broadcast_object(owner_error, src=0)
+        if owner_error is not None:
+            if owner_exception is not None:
+                raise owner_exception
+            raise RuntimeError(
+                f"MiniMax H3 audio decode failed on rank 0: {owner_error}"
+            )
+        if replica_group is not None:
+            audio_payload = replica_group.broadcast_tensor_dict(audio_payload, src=0)"""
+    new9 = """        replica_group = get_replica_group() if model_parallel_is_initialized() else None
+        is_audio_owner = replica_group is None or replica_group.rank_in_group == 0
+        owner_exception = None
+        owner_error = None
+        audio_payload = None
+        _is_tpu_decode = visual_latent.device.type == "tpu"
+        if _is_tpu_decode and self.audio_vae is not None:
+            _avae_param = next(self.audio_vae.parameters(), None)
+            if _avae_param is not None and _avae_param.device.type == "tpu":
+                self.audio_vae = self.audio_vae.to(device="cpu", dtype=torch.float32)
+        _audio_latent_cpu = (
+            audio_latent.detach().to(device="cpu", dtype=torch.float32)
+            if _is_tpu_decode
+            else None
+        )
+        if is_audio_owner:
+            try:
+                if _is_tpu_decode:
+                    assert self.audio_vae is not None
+                    _avae = self.audio_vae.to(device="cpu", dtype=torch.float32)
+                    if _avae.training:
+                        _avae.eval()
+                    _a_cfg = server_args.pipeline_config.audio_vae_config.arch_config
+                    _a_lat = _reverse_normalize_latents(
+                        _audio_latent_cpu,
+                        mean_values=_a_cfg.latents_mean,
+                        std_values=_a_cfg.latents_std,
+                        name="audio_vae",
+                    ).to(device="cpu", dtype=torch.float32)
+                    _wf = _required_tensor(_avae.decode(_a_lat), "audio_vae.decode")
+                    audio_payload = {
+                        "waveform": _wf.detach().to(device="cpu", dtype=torch.float32).contiguous(),
+                        "sample_rate": int(_avae.sample_rate),
+                    }
+                else:
+                    audio_payload = self._decode_audio(audio_latent, server_args)
+            except Exception as exc:
+                owner_exception = exc
+                owner_error = f"{type(exc).__name__}: {exc}"
+        if replica_group is not None:
+            owner_error = replica_group.broadcast_object(owner_error, src=0)
+        if owner_error is not None:
+            if owner_exception is not None:
+                raise owner_exception
+            raise RuntimeError(
+                f"MiniMax H3 audio decode failed on rank 0: {owner_error}"
+            )
+        if replica_group is not None:
+            if _is_tpu_decode:
+                audio_payload = replica_group.broadcast_object(audio_payload, src=0)
+            else:
+                audio_payload = replica_group.broadcast_tensor_dict(audio_payload, src=0)"""
+    if '_is_tpu_decode = visual_latent.device.type == "tpu"' not in t9:
+        assert old9 in t9, "Patch 9 target missing in minimax_h3/stages/decoding.py"
+        p9.write_text(t9.replace(old9, new9, 1))
+
+    log(idx, "Applied all 9 SGLang TPU v5p runtime patches (AdaLN int32, VDN, Qwen3-VL, Denoise, MRoPE, FP8 _scaled_mm, v5p Splash, CPU AudioDecode).")
 
 
 def setup_single_host_metadata_hook(idx: int, bucket: str) -> None:
@@ -290,6 +775,15 @@ def generate_synthetic_keyframes(input_dir: Path) -> dict[str, str]:
     return paths
 
 
+def ensure_fl2va_symlinks(fl2va_dir: Path) -> None:
+    if not (fl2va_dir / "vae").exists() and (fl2va_dir / "video_vae").exists():
+        (fl2va_dir / "vae").symlink_to("video_vae")
+    v_sf = fl2va_dir / "video_vae" / "model.safetensors"
+    v_src = fl2va_dir / "video_vae" / "source" / "model.safetensors"
+    if not v_sf.exists() and v_src.exists():
+        v_sf.symlink_to("source/model.safetensors")
+
+
 def stage_single_model_in_shm(idx: int, bucket: str, which: str) -> str:
     """Strictly stage ONE model checkpoint at a time in /dev/shm to preserve 270+ GiB free CPU RAM."""
     base_dir = Path("/dev/shm/MiniMax-H3")
@@ -303,12 +797,14 @@ def stage_single_model_in_shm(idx: int, bucket: str, which: str) -> str:
             fast_gcs_sync_dir(
                 idx,
                 bucket,
-                "models/MiniMaxAI/MiniMax-H3/",
-                base_dir,
-                allowed_prefixes=("FL2VA/", "model_index.json", "modular_model_index.json"),
+                "models/MiniMaxAI/MiniMax-H3/FL2VA/",
+                base_dir / "FL2VA",
             )
+            ensure_fl2va_symlinks(base_dir / "FL2VA")
             assert (base_dir / "FL2VA" / "model_index.json").exists(), "Missing FL2VA/model_index.json!"
             marker.write_text("ok\n")
+        else:
+            ensure_fl2va_symlinks(base_dir / "FL2VA")
         return str(base_dir / "FL2VA")
     elif which == "fasth3":
         if base_dir.exists():
@@ -1040,35 +1536,71 @@ def main() -> None:
             {"label": "768p 16:9 5s i2v (4-step)", "task": "fl2va", "short_edge": 768, "aspect_ratio": "16:9", "duration_seconds": 5.0, "num_inference_steps": 5, "concurrency": 1, "num_requests": 2},
             {"label": "768p 16:9 5s t2va (25-step)", "task": "t2va", "short_edge": 768, "aspect_ratio": "16:9", "duration_seconds": 5.0, "num_inference_steps": 26, "concurrency": 1, "num_requests": 2},
         ]
-        # 2A: Online AdaLN + XLA Fused SDPA
-        run_host_sweep(
-            idx,
-            bucket=args.gcs_bucket,
-            gcs_out_prefix=gcs_prefix,
-            config_meta={
-                "name": "mh3_bf16_u4_sdpa_adaln",
-                "model_short": "MiniMax-H3 (FL2VA)",
-                "is_fasth3": False,
-                "precision": "BF16",
-                "chips": 4,
-                "num_gpus": 4,
-                "ulysses_degree": 4,
-                "attn_mode": "XLA Fused SDPA + AdaLN-online",
-            },
-            server_spec={
-                "config_name": "mh3_bf16_u4_sdpa_adaln",
-                "model_path": base_dir,
-                "port": port,
-                "num_gpus": 4,
-                "ulysses_degree": 4,
-                "quantization": None,
-                "v5p_splash": False,
-                "adaln_online": True,
-            },
-            workloads=ablation_workloads,
-            keyframes=keyframes,
-            existing_results=pod_results,
-        )
+        # 2A: Online AdaLN + XLA Fused SDPA (ablation test; pruned curve checkpoint embeds polynomial)
+        try:
+            run_host_sweep(
+                idx,
+                bucket=args.gcs_bucket,
+                gcs_out_prefix=gcs_prefix,
+                config_meta={
+                    "name": "mh3_bf16_u4_sdpa_adaln",
+                    "model_short": "MiniMax-H3 (FL2VA)",
+                    "is_fasth3": False,
+                    "precision": "BF16",
+                    "chips": 4,
+                    "num_gpus": 4,
+                    "ulysses_degree": 4,
+                    "attn_mode": "XLA Fused SDPA + AdaLN-online",
+                },
+                server_spec={
+                    "config_name": "mh3_bf16_u4_sdpa_adaln",
+                    "model_path": base_dir,
+                    "port": port,
+                    "num_gpus": 4,
+                    "ulysses_degree": 4,
+                    "quantization": None,
+                    "v5p_splash": False,
+                    "adaln_online": True,
+                },
+                workloads=ablation_workloads,
+                keyframes=keyframes,
+                existing_results=pod_results,
+            )
+        except Exception as exc:
+            log(idx, f"2A AdaLN-online ablation note: {exc} (pruned curve checkpoint embeds AdaLN polynomial)")
+
+        # 2A-Standard: Standard XLA Fused SDPA on ablation workloads
+        try:
+            run_host_sweep(
+                idx,
+                bucket=args.gcs_bucket,
+                gcs_out_prefix=gcs_prefix,
+                config_meta={
+                    "name": "mh3_bf16_u4_sdpa_ablation",
+                    "model_short": "MiniMax-H3 (FL2VA)",
+                    "is_fasth3": False,
+                    "precision": "BF16",
+                    "chips": 4,
+                    "num_gpus": 4,
+                    "ulysses_degree": 4,
+                    "attn_mode": "XLA Fused SDPA",
+                },
+                server_spec={
+                    "config_name": "mh3_bf16_u4_sdpa_ablation",
+                    "model_path": base_dir,
+                    "port": port,
+                    "num_gpus": 4,
+                    "ulysses_degree": 4,
+                    "quantization": None,
+                    "v5p_splash": False,
+                    "adaln_online": False,
+                },
+                workloads=ablation_workloads,
+                keyframes=keyframes,
+                existing_results=pod_results,
+            )
+        except Exception as exc:
+            log(idx, f"2A-Standard ablation note: {exc}")
 
         # 2B: Unlocked TPU v5p Pallas Splash Attention (`SGLANG_TPU_V5P_SPLASH=1`)
         try:
