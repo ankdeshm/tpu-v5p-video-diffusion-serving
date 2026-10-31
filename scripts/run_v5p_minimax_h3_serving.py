@@ -1255,7 +1255,12 @@ def main() -> None:
                     break
                 time.sleep(5)
 
+            for i in range(4):
+                raw_n = gcs_download_bytes(args.gcs_bucket, f"{gcs_prefix}/nodes/node_{i}.json")
+                if raw_n:
+                    nodes[i] = json.loads(raw_n.decode("utf-8"))
             endpoints = [f"http://{nodes[i]['ip']}:{30100 + i}" for i in range(4)]
+            log(0, f"Phase 1B DP=4 live endpoints: {endpoints}")
             cluster_rows: list[dict[str, Any]] = []
 
             cluster_suites = [
