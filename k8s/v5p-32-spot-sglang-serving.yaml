@@ -1,0 +1,479 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: v5p32-sglang-video-p0
+  namespace: default
+  labels:
+    app: v5p-32-spot-sglang-serving
+    workload: v5p-video-serving-priority-2-3-sglang
+spec:
+  backoffLimit: 1
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+      labels:
+        app: v5p-32-spot-sglang-serving
+        workload: v5p-video-serving-priority-2-3-sglang
+        pod-idx: "0"
+    spec:
+      terminationGracePeriodSeconds: 10
+      restartPolicy: Never
+      serviceAccountName: default
+      nodeSelector:
+        cloud.google.com/gke-nodepool: ank-tpu-v5p-32-spot
+        cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
+        cloud.google.com/gke-tpu-topology: 2x4x4
+      tolerations:
+      - key: "google.com/tpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-spot"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-queued"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: sglang-video-serve
+        image: us-central1-docker.pkg.dev/diesel-patrol-382622/vllm/sglang-torchtpu-diffusion:v0.2.0
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: PJRT_DEVICE
+          value: "TPU"
+        - name: JOB_COMPLETION_INDEX
+          value: "0"
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+        command:
+        - bash
+        - -lc
+        - |
+          set -euo pipefail
+          df -h /dev/shm
+          free -g
+          TOK=$(curl -sS -H "Metadata-Flavor: Google" "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          curl -fsSL -H "Authorization: Bearer ${TOK}" \
+            "https://storage.googleapis.com/storage/v1/b/ank-usc1-bucket-314837540096/o/v5p-video-serving-scripts%2Frun_v5p_ltx25_wan22_sglang.py?alt=media" \
+            -o /tmp/run_v5p_ltx25_wan22_sglang.py
+          exec python3 -u /tmp/run_v5p_ltx25_wan22_sglang.py \
+            --gcs-bucket=ank-usc1-bucket-314837540096 \
+            --run-id=v5p32_spot_sglang_serve_p23 \
+            --num-pods=6
+        resources:
+          requests:
+            google.com/tpu: "4"
+          limits:
+            google.com/tpu: "4"
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: v5p32-sglang-video-p1
+  namespace: default
+  labels:
+    app: v5p-32-spot-sglang-serving
+    workload: v5p-video-serving-priority-2-3-sglang
+spec:
+  backoffLimit: 1
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+      labels:
+        app: v5p-32-spot-sglang-serving
+        workload: v5p-video-serving-priority-2-3-sglang
+        pod-idx: "1"
+    spec:
+      terminationGracePeriodSeconds: 10
+      restartPolicy: Never
+      serviceAccountName: default
+      nodeSelector:
+        cloud.google.com/gke-nodepool: ank-tpu-v5p-32-spot
+        cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
+        cloud.google.com/gke-tpu-topology: 2x4x4
+      tolerations:
+      - key: "google.com/tpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-spot"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-queued"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: sglang-video-serve
+        image: us-central1-docker.pkg.dev/diesel-patrol-382622/vllm/sglang-torchtpu-diffusion:v0.2.0
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: PJRT_DEVICE
+          value: "TPU"
+        - name: JOB_COMPLETION_INDEX
+          value: "1"
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+        command:
+        - bash
+        - -lc
+        - |
+          set -euo pipefail
+          df -h /dev/shm
+          free -g
+          TOK=$(curl -sS -H "Metadata-Flavor: Google" "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          curl -fsSL -H "Authorization: Bearer ${TOK}" \
+            "https://storage.googleapis.com/storage/v1/b/ank-usc1-bucket-314837540096/o/v5p-video-serving-scripts%2Frun_v5p_ltx25_wan22_sglang.py?alt=media" \
+            -o /tmp/run_v5p_ltx25_wan22_sglang.py
+          exec python3 -u /tmp/run_v5p_ltx25_wan22_sglang.py \
+            --gcs-bucket=ank-usc1-bucket-314837540096 \
+            --run-id=v5p32_spot_sglang_serve_p23 \
+            --num-pods=6
+        resources:
+          requests:
+            google.com/tpu: "4"
+          limits:
+            google.com/tpu: "4"
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: v5p32-sglang-video-p2
+  namespace: default
+  labels:
+    app: v5p-32-spot-sglang-serving
+    workload: v5p-video-serving-priority-2-3-sglang
+spec:
+  backoffLimit: 1
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+      labels:
+        app: v5p-32-spot-sglang-serving
+        workload: v5p-video-serving-priority-2-3-sglang
+        pod-idx: "2"
+    spec:
+      terminationGracePeriodSeconds: 10
+      restartPolicy: Never
+      serviceAccountName: default
+      nodeSelector:
+        cloud.google.com/gke-nodepool: ank-tpu-v5p-32-spot
+        cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
+        cloud.google.com/gke-tpu-topology: 2x4x4
+      tolerations:
+      - key: "google.com/tpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-spot"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-queued"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: sglang-video-serve
+        image: us-central1-docker.pkg.dev/diesel-patrol-382622/vllm/sglang-torchtpu-diffusion:v0.2.0
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: PJRT_DEVICE
+          value: "TPU"
+        - name: JOB_COMPLETION_INDEX
+          value: "2"
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+        command:
+        - bash
+        - -lc
+        - |
+          set -euo pipefail
+          df -h /dev/shm
+          free -g
+          TOK=$(curl -sS -H "Metadata-Flavor: Google" "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          curl -fsSL -H "Authorization: Bearer ${TOK}" \
+            "https://storage.googleapis.com/storage/v1/b/ank-usc1-bucket-314837540096/o/v5p-video-serving-scripts%2Frun_v5p_ltx25_wan22_sglang.py?alt=media" \
+            -o /tmp/run_v5p_ltx25_wan22_sglang.py
+          exec python3 -u /tmp/run_v5p_ltx25_wan22_sglang.py \
+            --gcs-bucket=ank-usc1-bucket-314837540096 \
+            --run-id=v5p32_spot_sglang_serve_p23 \
+            --num-pods=6
+        resources:
+          requests:
+            google.com/tpu: "4"
+          limits:
+            google.com/tpu: "4"
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: v5p32-sglang-video-p3
+  namespace: default
+  labels:
+    app: v5p-32-spot-sglang-serving
+    workload: v5p-video-serving-priority-2-3-sglang
+spec:
+  backoffLimit: 1
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+      labels:
+        app: v5p-32-spot-sglang-serving
+        workload: v5p-video-serving-priority-2-3-sglang
+        pod-idx: "3"
+    spec:
+      terminationGracePeriodSeconds: 10
+      restartPolicy: Never
+      serviceAccountName: default
+      nodeSelector:
+        cloud.google.com/gke-nodepool: ank-tpu-v5p-32-spot
+        cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
+        cloud.google.com/gke-tpu-topology: 2x4x4
+      tolerations:
+      - key: "google.com/tpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-spot"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-queued"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: sglang-video-serve
+        image: us-central1-docker.pkg.dev/diesel-patrol-382622/vllm/sglang-torchtpu-diffusion:v0.2.0
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: PJRT_DEVICE
+          value: "TPU"
+        - name: JOB_COMPLETION_INDEX
+          value: "3"
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+        command:
+        - bash
+        - -lc
+        - |
+          set -euo pipefail
+          df -h /dev/shm
+          free -g
+          TOK=$(curl -sS -H "Metadata-Flavor: Google" "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          curl -fsSL -H "Authorization: Bearer ${TOK}" \
+            "https://storage.googleapis.com/storage/v1/b/ank-usc1-bucket-314837540096/o/v5p-video-serving-scripts%2Frun_v5p_ltx25_wan22_sglang.py?alt=media" \
+            -o /tmp/run_v5p_ltx25_wan22_sglang.py
+          exec python3 -u /tmp/run_v5p_ltx25_wan22_sglang.py \
+            --gcs-bucket=ank-usc1-bucket-314837540096 \
+            --run-id=v5p32_spot_sglang_serve_p23 \
+            --num-pods=6
+        resources:
+          requests:
+            google.com/tpu: "4"
+          limits:
+            google.com/tpu: "4"
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: v5p32-sglang-video-p4
+  namespace: default
+  labels:
+    app: v5p-32-spot-sglang-serving
+    workload: v5p-video-serving-priority-2-3-sglang
+spec:
+  backoffLimit: 1
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+      labels:
+        app: v5p-32-spot-sglang-serving
+        workload: v5p-video-serving-priority-2-3-sglang
+        pod-idx: "4"
+    spec:
+      terminationGracePeriodSeconds: 10
+      restartPolicy: Never
+      serviceAccountName: default
+      nodeSelector:
+        cloud.google.com/gke-nodepool: ank-tpu-v5p-32-spot
+        cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
+        cloud.google.com/gke-tpu-topology: 2x4x4
+      tolerations:
+      - key: "google.com/tpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-spot"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-queued"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: sglang-video-serve
+        image: us-central1-docker.pkg.dev/diesel-patrol-382622/vllm/sglang-torchtpu-diffusion:v0.2.0
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: PJRT_DEVICE
+          value: "TPU"
+        - name: JOB_COMPLETION_INDEX
+          value: "4"
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+        command:
+        - bash
+        - -lc
+        - |
+          set -euo pipefail
+          df -h /dev/shm
+          free -g
+          TOK=$(curl -sS -H "Metadata-Flavor: Google" "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          curl -fsSL -H "Authorization: Bearer ${TOK}" \
+            "https://storage.googleapis.com/storage/v1/b/ank-usc1-bucket-314837540096/o/v5p-video-serving-scripts%2Frun_v5p_ltx25_wan22_sglang.py?alt=media" \
+            -o /tmp/run_v5p_ltx25_wan22_sglang.py
+          exec python3 -u /tmp/run_v5p_ltx25_wan22_sglang.py \
+            --gcs-bucket=ank-usc1-bucket-314837540096 \
+            --run-id=v5p32_spot_sglang_serve_p23 \
+            --num-pods=6
+        resources:
+          requests:
+            google.com/tpu: "4"
+          limits:
+            google.com/tpu: "4"
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: v5p32-sglang-video-p5
+  namespace: default
+  labels:
+    app: v5p-32-spot-sglang-serving
+    workload: v5p-video-serving-priority-2-3-sglang
+spec:
+  backoffLimit: 1
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+      labels:
+        app: v5p-32-spot-sglang-serving
+        workload: v5p-video-serving-priority-2-3-sglang
+        pod-idx: "5"
+    spec:
+      terminationGracePeriodSeconds: 10
+      restartPolicy: Never
+      serviceAccountName: default
+      nodeSelector:
+        cloud.google.com/gke-nodepool: ank-tpu-v5p-32-spot
+        cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
+        cloud.google.com/gke-tpu-topology: 2x4x4
+      tolerations:
+      - key: "google.com/tpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-spot"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-queued"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: sglang-video-serve
+        image: us-central1-docker.pkg.dev/diesel-patrol-382622/vllm/sglang-torchtpu-diffusion:v0.2.0
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: PJRT_DEVICE
+          value: "TPU"
+        - name: JOB_COMPLETION_INDEX
+          value: "5"
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+        command:
+        - bash
+        - -lc
+        - |
+          set -euo pipefail
+          df -h /dev/shm
+          free -g
+          TOK=$(curl -sS -H "Metadata-Flavor: Google" "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          curl -fsSL -H "Authorization: Bearer ${TOK}" \
+            "https://storage.googleapis.com/storage/v1/b/ank-usc1-bucket-314837540096/o/v5p-video-serving-scripts%2Frun_v5p_ltx25_wan22_sglang.py?alt=media" \
+            -o /tmp/run_v5p_ltx25_wan22_sglang.py
+          exec python3 -u /tmp/run_v5p_ltx25_wan22_sglang.py \
+            --gcs-bucket=ank-usc1-bucket-314837540096 \
+            --run-id=v5p32_spot_sglang_serve_p23 \
+            --num-pods=6
+        resources:
+          requests:
+            google.com/tpu: "4"
+          limits:
+            google.com/tpu: "4"
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
