@@ -222,150 +222,8 @@ def apply_vllm_omni_tpu_patches(idx: int) -> None:
 
 
 def setup_single_host_metadata_hook(idx: int, bucket: str) -> None:
-    ws = Path("/workspace")
-    ws.mkdir(parents=True, exist_ok=True)
-    (ws / "metadata_hook.c").write_text(
-        r"""#define _GNU_SOURCE
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <dlfcn.h>
-#include <string.h>
-
-static int (*real_connect)(int, const struct sockaddr*, socklen_t) = NULL;
-
-int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
-    if (!real_connect) real_connect = dlsym(RTLD_NEXT, "connect");
-    if (addr && addr->sa_family == AF_INET) {
-        struct sockaddr_in copy = *(const struct sockaddr_in *)addr;
-        char ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &(copy.sin_addr), ip, INET_ADDRSTRLEN);
-        if (strcmp(ip, "169.254.169.254") == 0) {
-            copy.sin_addr.s_addr = inet_addr("127.0.0.1");
-            copy.sin_port = htons(80);
-            return real_connect(sockfd, (const struct sockaddr *)&copy, sizeof(copy));
-        }
-    }
-    return real_connect(sockfd, addr, addrlen);
-}
-"""
-    )
-    (ws / "mock_tpu_mode.json").write_text(
-        json.dumps({"chips_bounds": "2,2,1", "topology": "2x2x1", "accel": "v5p-8", "m_ports": "8431,8432,8433,8434"})
-    )
-    (ws / "mock_metadata.py").write_text(
-        r"""import json, urllib.parse, urllib.request, urllib.error
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-
-def _mode():
-    try:
-        return json.loads(Path("/workspace/mock_tpu_mode.json").read_text())
-    except Exception:
-        return {"chips_bounds": "2,2,1", "topology": "2x2x1", "accel": "v5p-8", "m_ports": "8431,8432,8433,8434"}
-
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):
-        pass
-
-    def _forward(self):
-        req = urllib.request.Request(f"http://169.254.169.254{self.path}")
-        for k, v in self.headers.items():
-            if k.lower() != "host":
-                req.add_header(k, v)
-        try:
-            with urllib.request.urlopen(req, timeout=5) as r:
-                self.send_response(r.status)
-                for k, v in r.headers.items():
-                    self.send_header(k, v)
-                self.end_headers()
-                self.wfile.write(r.read())
-        except urllib.error.HTTPError as e:
-            self.send_response(e.code)
-            for k, v in e.headers.items():
-                self.send_header(k, v)
-            self.end_headers()
-            self.wfile.write(e.read())
-        except Exception as e:
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(str(e).encode())
-
-    def do_GET(self):
-        if self.headers.get("Metadata-Flavor") != "Google":
-            self.send_response(400)
-            self.end_headers()
-            return
-        path = urllib.parse.urlparse(self.path).path
-        m = _mode()
-        tpu_keys = {
-            "TPU_WORKER_ID": "0",
-            "ALT": "false",
-            "CHIPS_PER_HOST_BOUNDS": m["chips_bounds"],
-            "CONSUMER_PROJECT_ID": "tpu-prod-env-one-vm",
-            "ENABLE_ICI_RESILIENCY": "false",
-            "ENABLE_IMPROVED_REROUTE_ALLREDUCE_STRATEGY": "false",
-            "HOST_BOUNDS": "1,1,1",
-            "INJECT_SLICE_BUILDER_FAULT": "",
-            "NODE_ID": "0",
-            "TOPOLOGY": m["topology"],
-            "TPU_ACCELERATOR_TYPE": m["accel"],
-            "WRAP": "false,false,false",
-            "ZONE": "us-central1-a",
-        }
-        body = None
-        attr = path.rsplit("/attributes/", 1)[-1] if "/instance/attributes/" in path else None
-        if attr in tpu_keys:
-            body = tpu_keys[attr].encode()
-        elif path.endswith("/computeMetadata/v1/instance/attributes/tpu-env"):
-            lines = [f"{k}: '{v}'" for k, v in tpu_keys.items()]
-            lines.append(f"TPU_RUNTIME_METRICS_PORTS: '{m['m_ports']}'")
-            body = ("\n".join(lines) + "\n").encode()
-        elif path.endswith(("/attributes/worker-network-endpoints", "/attributes/instance-id")):
-            req = urllib.request.Request("http://169.254.169.254/computeMetadata/v1/instance/hostname", headers={"Metadata-Flavor": "Google"})
-            hn = urllib.request.urlopen(req, timeout=2).read().decode().strip().split(".")[0]
-            body = hn.encode()
-        elif path.endswith("/computeMetadata/v1/instance/attributes/accelerator-type"):
-            body = m["accel"].encode()
-        elif path.endswith("/computeMetadata/v1/instance/attributes/agent-worker-number"):
-            body = b"0"
-        elif path.endswith("/computeMetadata/v1/project/project-id"):
-            body = b"tpu-prod-env-one-vm"
-        elif path.endswith("/computeMetadata/v1/project/numeric-project-id"):
-            body = b"1234567890"
-        elif path.endswith(("/computeMetadata/v1/universe/universe-domain", "/universe-domain")):
-            body = b"googleapis.com"
-        if body is not None:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(body)
-        else:
-            self._forward()
-
-if __name__ == "__main__":
-    ThreadingHTTPServer(("", 80), Handler).serve_forever()
-"""
-    )
-    subprocess.run(
-        [
-            "bash",
-            "-lc",
-            "set -euo pipefail && gcc -shared -fPIC -O2 -o /workspace/metadata_hook.so /workspace/metadata_hook.c -ldl "
-            "&& (grep -q 'metadata.google.internal' /etc/hosts || echo '127.0.0.1 metadata.google.internal' >> /etc/hosts)",
-        ],
-        check=True,
-    )
-    env_clean = {k: v for k, v in os.environ.items() if k != "LD_PRELOAD"}
-    mf = open("/workspace/mock_metadata.log", "w")
-    subprocess.Popen(["python3", "/workspace/mock_metadata.py"], env=env_clean, stdout=mf, stderr=subprocess.STDOUT)
-    for _ in range(20):
-        try:
-            with socket.create_connection(("127.0.0.1", 80), timeout=0.5):
-                return
-        except OSError:
-            time.sleep(0.25)
+    Path("/workspace").mkdir(parents=True, exist_ok=True)
+    log(idx, "Configured TPU v5p single-host isolation via TPU_SKIP_MDS_QUERY=true + TPU_WORKER_HOSTNAMES=localhost.")
 
 
 def generate_reference_images(out_dir: Path) -> dict[str, str]:
@@ -472,28 +330,25 @@ def start_vllm_omni_server(
         "LIBTPU_INIT_ARGS",
         "TPU_ML_PLATFORM",
         "TPU_PREMAPPED_BUFFER_SIZE",
+        "JAX_PLATFORMS",
+        "LD_PRELOAD",
     ):
         env.pop(k, None)
 
     if num_chips == 2:
-        chips_bounds, topo, accel, vis_devs, m_ports = "1,2,1", "1x2x1", "v5p-4", "0,1", "8431,8432"
+        chips_bounds, topo, accel, vis_devs = "1,2,1", "1x2x1", "v5p-4", "0,1"
     else:
-        chips_bounds, topo, accel, vis_devs, m_ports = "2,2,1", "2x2x1", "v5p-8", "0,1,2,3", "8431,8432,8433,8434"
+        chips_bounds, topo, accel, vis_devs = "2,2,1", "2x2x1", "v5p-8", "0,1,2,3"
 
-    Path("/workspace/mock_tpu_mode.json").write_text(
-        json.dumps({"chips_bounds": chips_bounds, "topology": topo, "accel": accel, "m_ports": m_ports})
-    )
-
-    ports = alloc_free_ports(num_chips + 1)
     cache_root = Path("/dev/shm/omni_xla_cache")
     (cache_root / "xla").mkdir(parents=True, exist_ok=True)
     (cache_root / "tmp").mkdir(parents=True, exist_ok=True)
 
     env.update(
         {
-            "MASTER_ADDR": "127.0.0.1",
-            "MASTER_PORT": str(ports[0]),
-            "TORCH_TPU_SLICEBUILDER_ADDRESSES": ",".join(f"localhost:{p}" for p in ports[1:]),
+            "TPU_SKIP_MDS_QUERY": "true",
+            "TPU_WORKER_ID": "0",
+            "TPU_WORKER_HOSTNAMES": "localhost",
             "TORCH_TPU_DEVICES_PER_HOST": str(num_chips),
             "TPU_CHIPS_PER_HOST_BOUNDS": chips_bounds,
             "CHIPS_PER_HOST_BOUNDS": chips_bounds,
@@ -503,22 +358,14 @@ def start_vllm_omni_server(
             "TOPOLOGY": topo,
             "TPU_ACCELERATOR_TYPE": accel,
             "TPU_VISIBLE_DEVICES": vis_devs,
-            "TPU_VISIBLE_CHIPS": vis_devs,
-            "TPU_RUNTIME_METRICS_PORTS": m_ports,
-            "JAX_PLATFORMS": "cpu",
             "PJRT_DEVICE": "TPU",
             "TPU_ML_PLATFORM": "PyTorch",
+            "DIFFUSION_ATTENTION_BACKEND": "TPU_SDPA",
             "LIBTPU_INIT_ARGS": (
                 "--xla_tpu_scoped_vmem_limit_kib=40960 "
                 "--xla_tpu_enable_async_collective_fusion=true "
                 "--xla_tpu_enable_async_collective_fusion_fuse_all_gather=true"
             ),
-            "TPU_PREMAPPED_BUFFER_SIZE": str(4 * 1024**3),
-            "GCE_METADATA_HOST": "127.0.0.1:80",
-            "GCE_METADATA_IP": "127.0.0.1",
-            "GOOGLE_CLOUD_PROJECT": "tpu-prod-env-one-vm",
-            "GCLOUD_PROJECT": "tpu-prod-env-one-vm",
-            "LD_PRELOAD": "/workspace/metadata_hook.so",
             "HF_HOME": "/dev/shm/hf_cache",
             "HF_HUB_OFFLINE": "1",
             "TRANSFORMERS_OFFLINE": "1",
