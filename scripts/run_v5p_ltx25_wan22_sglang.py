@@ -355,7 +355,7 @@ class Handler(BaseHTTPRequestHandler):
             "ZONE": "us-central1-a",
         }
         body = None
-        attr = path.rsplit("/attributes/", 1)[-1] if "/instance/attributes/" in path else None
+        attr = path.rstrip("/").rsplit("/", 1)[-1] if "/instance/attributes/" in path else None
         if attr in tpu_keys:
             body = tpu_keys[attr].encode()
         elif path.endswith("/computeMetadata/v1/instance/attributes/tpu-env"):
@@ -602,7 +602,6 @@ def start_sglang_server(
         "--image-encoder-cpu-offload=false",
         "--vae-cpu-offload=false",
         "--offload-during-compile=false",
-        "--save-output",
         "--output-path",
         str(out_dir),
     ]
