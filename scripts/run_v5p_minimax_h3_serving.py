@@ -942,6 +942,7 @@ def start_sglang_server(
     ulysses_degree: int,
     quantization: str | None,
     v5p_splash: bool,
+    cfg_parallel_size: int = 1,
     adaln_online: bool = True,
     encoder_offload: bool = True,
     ready_timeout_s: int = 1200,
@@ -979,6 +980,8 @@ def start_sglang_server(
         "--output-path",
         str(out_dir),
     ]
+    if cfg_parallel_size > 1:
+        cmd.extend(["--cfg-parallel-size", str(cfg_parallel_size)])
     if quantization:
         cmd.extend(["--quantization", quantization])
     if adaln_online:
@@ -1501,34 +1504,77 @@ def main() -> None:
 
     elif idx == 1:
         base_dir = stage_single_model_in_shm(idx, args.gcs_bucket, "minimax_h3")
-        run_host_sweep(
-            idx,
-            bucket=args.gcs_bucket,
-            gcs_out_prefix=gcs_prefix,
-            config_meta={
-                "name": "mh3_fp8_u4_sdpa",
-                "model_short": "MiniMax-H3 (FL2VA)",
-                "is_fasth3": False,
-                "precision": "FP8 (online)",
-                "chips": 4,
-                "num_gpus": 4,
-                "ulysses_degree": 4,
-                "attn_mode": "XLA Fused SDPA",
-            },
-            server_spec={
-                "config_name": "mh3_fp8_u4_sdpa",
-                "model_path": base_dir,
-                "port": port,
-                "num_gpus": 4,
-                "ulysses_degree": 4,
-                "quantization": "fp8",
-                "v5p_splash": False,
-                "adaln_online": True,
-            },
-            workloads=base_workloads,
-            keyframes=keyframes,
-            existing_results=pod_results,
-        )
+        cfg2_workloads = [
+            {"label": "768p 16:9 15s i2v (4-step)", "task": "fl2va", "short_edge": 768, "aspect_ratio": "16:9", "duration_seconds": 15.0, "num_inference_steps": 5, "concurrency": 1, "num_requests": 2},
+            {"label": "768p 16:9 15s i2v (25-step)", "task": "fl2va", "short_edge": 768, "aspect_ratio": "16:9", "duration_seconds": 15.0, "num_inference_steps": 26, "concurrency": 1, "num_requests": 2},
+            {"label": "768p 16:9 5s i2v (4-step)", "task": "fl2va", "short_edge": 768, "aspect_ratio": "16:9", "duration_seconds": 5.0, "num_inference_steps": 5, "concurrency": 1, "num_requests": 2},
+            {"label": "768p 16:9 5s t2va (25-step)", "task": "t2va", "short_edge": 768, "aspect_ratio": "16:9", "duration_seconds": 5.0, "num_inference_steps": 26, "concurrency": 1, "num_requests": 2},
+            {"label": "512p 16:9 15s i2v (4-step)", "task": "fl2va", "short_edge": 512, "aspect_ratio": "16:9", "duration_seconds": 15.0, "num_inference_steps": 5, "concurrency": 1, "num_requests": 2},
+        ]
+        try:
+            run_host_sweep(
+                idx,
+                bucket=args.gcs_bucket,
+                gcs_out_prefix=gcs_prefix,
+                config_meta={
+                    "name": "mh3_bf16_cfg2_u2_sdpa",
+                    "model_short": "MiniMax-H3 (FL2VA)",
+                    "is_fasth3": False,
+                    "precision": "BF16",
+                    "chips": 4,
+                    "num_gpus": 4,
+                    "ulysses_degree": 2,
+                    "attn_mode": "CFG=2 × USP=2 + XLA SDPA + AdaLN-online",
+                },
+                server_spec={
+                    "config_name": "mh3_bf16_cfg2_u2_sdpa",
+                    "model_path": base_dir,
+                    "port": port,
+                    "num_gpus": 4,
+                    "ulysses_degree": 2,
+                    "cfg_parallel_size": 2,
+                    "quantization": None,
+                    "v5p_splash": False,
+                    "adaln_online": True,
+                },
+                workloads=cfg2_workloads,
+                keyframes=keyframes,
+                existing_results=pod_results,
+            )
+        except Exception as exc:
+            log(idx, f"1A CFG=2xUSP=2 note: {exc}")
+
+        try:
+            run_host_sweep(
+                idx,
+                bucket=args.gcs_bucket,
+                gcs_out_prefix=gcs_prefix,
+                config_meta={
+                    "name": "mh3_bf16_u2_2chips_sdpa",
+                    "model_short": "MiniMax-H3 (FL2VA)",
+                    "is_fasth3": False,
+                    "precision": "BF16",
+                    "chips": 2,
+                    "num_gpus": 2,
+                    "ulysses_degree": 2,
+                    "attn_mode": "2-Chip USP=2 + XLA SDPA + AdaLN-online",
+                },
+                server_spec={
+                    "config_name": "mh3_bf16_u2_2chips_sdpa",
+                    "model_path": base_dir,
+                    "port": port,
+                    "num_gpus": 2,
+                    "ulysses_degree": 2,
+                    "quantization": None,
+                    "v5p_splash": False,
+                    "adaln_online": True,
+                },
+                workloads=cfg2_workloads[:3],
+                keyframes=keyframes,
+                existing_results=pod_results,
+            )
+        except Exception as exc:
+            log(idx, f"1B 2-chip USP=2 note: {exc}")
 
     elif idx == 2:
         base_dir = stage_single_model_in_shm(idx, args.gcs_bucket, "minimax_h3")
