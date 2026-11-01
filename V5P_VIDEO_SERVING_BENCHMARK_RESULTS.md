@@ -65,8 +65,9 @@ Single-host configurations below utilize **1 host = 4 physical `v5p` chips** (or
 | **Wan2.2-T2V** | `sglang` | BF16 | U=4 (4 chips) | 480p (832x480) | 5.0s / 81f | 20 | - | **118.538** | 5926.9 | **0.51 / host** | 0.042x | Verified OK |
 | **Wan2.2-T2V** | `sglang` | BF16 | U=4 (4 chips) | 480p (832x480) | 5.0s / 81f | 40 | - | **226.198** | 5655.0 | **0.27 / host** | 0.022x | Verified OK |
 | **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | U=4 + AdaLN-Online | **768p 16:9 (1344x768)** | **5.0s** | 4 | 644.83 | **291.180** | 72165.8 | **0.206 / host** | 0.017x | Verified OK (`58.2 GB` HBM) |
-| **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | **U=4 (Precomputed AdaLN)** | **768p 16:9 (1344x768)** | **15.0s** | 4 | 1657.22 | **389.363** | 96400.2 | **0.154 / host** | **0.039x** | Verified OK (`70.3 GB` HBM — **#1 `v5p`!**) |
-| **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | U=4 + AdaLN-Online | **768p 16:9 (1344x768)** | **15.0s** | 4 | 1521.69 | **458.692** | 113711.0 | **0.131 / host** | 0.033x | Verified OK (`70.3 GB` HBM) |
+| **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | **U=4 + Tuned AdaLN-Online (`p2`)** | **768p 16:9 (1344x768)** | **15.0s** | 4 | 1554.80 | **385.956** | 95498.5 | **0.155 / host** | **0.039x** | Verified OK (`74.6 GB` HBM — **#1 `v5p`!**) |
+| **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | U=4 (Precomputed AdaLN) | **768p 16:9 (1344x768)** | **15.0s** | 4 | 1657.22 | **389.363** | 96400.2 | **0.154 / host** | **0.039x** | Verified OK (`70.3 GB` HBM) |
+| **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | U=4 + AdaLN-Online (`p1`) | **768p 16:9 (1344x768)** | **15.0s** | 4 | 1521.69 | **458.692** | 113711.0 | **0.131 / host** | 0.033x | Verified OK (`70.3 GB` HBM) |
 | **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | U=4 + AdaLN-Online | **768p 16:9 (1344x768)** | **15.0s** | **25** | - | **952.301** | **37936.3** | **0.063 / host** | 0.016x | Verified OK (`72.0 GB` HBM) |
 
 ---
