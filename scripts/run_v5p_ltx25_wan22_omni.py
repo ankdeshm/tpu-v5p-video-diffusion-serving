@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Priority #2 & #3 (vLLM-Omni Engine): LTX-2.5 & Wan 2.2 (T2V-A14B / I2V-A14B) Serving Benchmark Suite on TPU v5p.
 
-Runs across 2 Spot TPU v5p hosts in `ank-tpu-v5p-32-spot` (topology `2x4x4`, 4 physical v5p chips =
+Runs across 2 Spot TPU v5p hosts in `tpu-v5p-32-pool` (topology `2x4x4`, 4 physical v5p chips =
 4 MegaCore PyTorch TPU devices / 380 GiB HBM2e / 440 GiB CPU RAM per host = 8 v5p chips across 2 hosts,
 running concurrently alongside the 6 `sglang-torchtpu` hosts on the 32-chip slice):
 
@@ -431,7 +431,7 @@ def start_vllm_omni_server(
     num_chips: int = 4,
     usp: int = 4,
     cfg_parallel_size: int = 1,
-    ready_timeout_s: int = 900,
+    ready_timeout_s: int = 1500,
 ) -> tuple[subprocess.Popen[Any], float, Path]:
     kill_omni_processes()
     log_path = Path(f"/workspace/vllm_omni_{config_name}.log")
@@ -482,7 +482,7 @@ def start_vllm_omni_server(
             "TPU_VISIBLE_DEVICES": vis_devs,
             "PJRT_DEVICE": "TPU",
             "TPU_ML_PLATFORM": "PyTorch",
-            "DIFFUSION_ATTENTION_BACKEND": "TPU_SDPA",
+            "DIFFUSION_ATTENTION_BACKEND": "TORCH_SDPA",
             "LIBTPU_INIT_ARGS": (
                 "--xla_tpu_scoped_vmem_limit_kib=40960 "
                 "--xla_tpu_enable_async_collective_fusion=true "
@@ -723,9 +723,9 @@ def run_omni_sweep(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--gcs-bucket", default="ank-usc1-bucket-314837540096")
-    ap.add_argument("--run-id", default="v5p32_spot_omni_serve_p23")
-    ap.add_argument("--num-pods", type=int, default=2)
+    ap.add_argument("--gcs-bucket", default="YOUR_GCS_BUCKET")
+    ap.add_argument("--run-id", default="v5p32_spot_omni_serve_p2_dp6")
+    ap.add_argument("--num-pods", type=int, default=6)
     args = ap.parse_args()
 
     idx = int(os.environ.get("JOB_COMPLETION_INDEX", "0"))
@@ -750,77 +750,159 @@ def main() -> None:
                     nodes[i] = json.loads(raw.decode("utf-8"))
         if len(nodes) < n_pods:
             time.sleep(3)
-    log(idx, f"All {n_pods} vllm-omni v5p-32 hosts registered!")
+    log(idx, f"Registered {len(nodes)}/{n_pods} vllm-omni v5p-32 hosts!")
 
     apply_vllm_omni_tpu_patches(idx)
     setup_single_host_metadata_hook(idx, args.gcs_bucket)
     refs = generate_reference_images(Path("/dev/shm/ref_inputs"))
 
-    ltx_workloads = [
-        {"label": "544p (960x544) 5s 121f T2VA (8-step distill)", "task": "t2va", "size": "960x544", "nf": 121, "dur": 5.0, "steps": 8, "guidance": 1.0, "n": 3},
-        {"label": "544p (960x544) 5s 121f I2VA (8-step distill)", "task": "i2va", "size": "960x544", "nf": 121, "dur": 5.0, "steps": 8, "guidance": 1.0, "n": 2},
-        {"label": "544p (960x544) 10s 241f T2VA (8-step distill)", "task": "t2va", "size": "960x544", "nf": 241, "dur": 10.0, "steps": 8, "guidance": 1.0, "n": 2},
-        {"label": "544p (960x544) 20s 481f T2VA (8-step distill)", "task": "t2va", "size": "960x544", "nf": 481, "dur": 20.0, "steps": 8, "guidance": 1.0, "n": 2},
-        {"label": "720p (1280x704) 5s 121f T2VA (8-step distill)", "task": "t2va", "size": "1280x704", "nf": 121, "dur": 5.0, "steps": 8, "guidance": 1.0, "n": 2},
-        {"label": "720p (1280x704) 10s 241f T2VA (8-step distill)", "task": "t2va", "size": "1280x704", "nf": 241, "dur": 10.0, "steps": 8, "guidance": 1.0, "n": 2},
-        {"label": "720p (1280x704) 5s 121f (20-step dev CFG=3.0)", "task": "t2va", "size": "1280x704", "nf": 121, "dur": 5.0, "steps": 20, "guidance": 3.0, "n": 2},
-    ]
+    # Phase B1 FIRST: 6-Host DP=6 (24 chips) LTX-2.5 Multi-Host Cluster Sweep!
+    cluster_rows: list[dict[str, Any]] = []
+    ltx_dir = stage_single_model(idx, args.gcs_bucket, "ltx25")
+    dp_ltx_port = 30450 + idx
+    proc_ltx, _, _ = start_vllm_omni_server(
+        idx, config_name=f"omni_ltx_dp_{idx}", model_path=ltx_dir, port=dp_ltx_port, num_chips=4, usp=4
+    )
+    try:
+        gcs_upload_bytes(args.gcs_bucket, f"{gcs_prefix}/ready_ltx_dp_{idx}.txt", f"http://{ip}:{dp_ltx_port}".encode("utf-8"), content_type="text/plain")
+        if idx == 0:
+            eps_ltx: dict[int, str] = {}
+            t_e = time.time()
+            while len(eps_ltx) < n_pods and time.time() - t_e < 900:
+                for i in range(n_pods):
+                    b = gcs_download_bytes(args.gcs_bucket, f"{gcs_prefix}/ready_ltx_dp_{i}.txt")
+                    if b:
+                        eps_ltx[i] = b.decode("utf-8").strip()
+                if len(eps_ltx) < n_pods:
+                    time.sleep(3)
+            act = sorted(eps_ltx.keys())
+            n_act = len(act)
+            for lbl, sz, nf, dur, steps, gs, conc, n_req in [
+                ("LTX-2.5 544p (960x544) 5s 121f T2VA (8-step)", "960x544", 121, 5.0, 8, 1.0, n_act, n_act * 3),
+                ("LTX-2.5 544p (960x544) 5s 121f T2VA (8-step)", "960x544", 121, 5.0, 8, 1.0, n_act * 2, n_act * 4),
+                ("LTX-2.5 720p (1280x704) 5s 121f T2VA (8-step)", "1280x704", 121, 5.0, 8, 1.0, n_act, n_act * 3),
+                ("LTX-2.5 720p (1280x704) 5s 121f T2VA (8-step)", "1280x704", 121, 5.0, 8, 1.0, n_act * 2, n_act * 4),
+                ("LTX-2.5 544p (960x544) 10s 241f T2VA (8-step)", "960x544", 241, 10.0, 8, 1.0, n_act, n_act * 2),
+            ]:
+                if n_act == 0:
+                    continue
+                log(0, f"[Cluster LTX DP={n_act}] Warming {n_act} hosts on {lbl}...")
+                with concurrent.futures.ThreadPoolExecutor(max_workers=n_act) as p:
+                    list(p.map(lambda i: call_vllm_omni_sync(eps_ltx[i], {"prompt": PROMPTS[0], "size": sz, "num_frames": nf, "fps": 24, "num_inference_steps": steps, "guidance_scale": gs, "seed": 42}), act))
+                t_c = time.perf_counter()
+                reqs = [(eps_ltx[act[r % n_act]], {"prompt": PROMPTS[r % len(PROMPTS)], "size": sz, "num_frames": nf, "fps": 24, "num_inference_steps": steps, "guidance_scale": gs, "seed": 5000 + r}) for r in range(n_req)]
+                with concurrent.futures.ThreadPoolExecutor(max_workers=conc) as p:
+                    outs = list(p.map(lambda it: call_vllm_omni_sync(it[0], it[1]), reqs))
+                ws = time.perf_counter() - t_c
+                oks = [o for o in outs if o.get("ok")]
+                rpm_m = round((len(oks) / ws) * 60.0, 3) if oks and ws > 0 else 0.0
+                rpm_dp8 = round(rpm_m * (8.0 / n_act), 3)
+                cluster_rows.append(
+                    {
+                        "family": "LTX-2.5",
+                        "engine": "vllm-omni",
+                        "precision": "BF16",
+                        "workload": lbl,
+                        "dp_replicas_measured": n_act,
+                        "chips_measured": n_act * 4,
+                        "concurrency": conc,
+                        "wall_s": round(ws, 3),
+                        "median_e2e_s": round(statistics.median([o["e2e_s"] for o in oks]), 3) if oks else None,
+                        "measured_rpm": rpm_m,
+                        "v5p32_dp8_slice_rpm": rpm_dp8,
+                        "v5p32_slices_for_30_rpm": math.ceil(30.0 / rpm_dp8) if rpm_dp8 > 0 else None,
+                        "video_sec_per_wall_sec_measured": round((len(oks) * dur) / ws, 3) if oks and ws > 0 else 0.0,
+                        "video_sec_per_wall_sec_v5p32": round(((len(oks) * dur) / ws) * (8.0 / n_act), 3) if oks and ws > 0 else 0.0,
+                        "ok": f"{len(oks)}/{n_req}",
+                    }
+                )
+                log(0, f"[Cluster LTX DP={n_act}] DONE {lbl} c={conc}: RPM={rpm_m} -> v5p-32(DP=8)={rpm_dp8} vids/min ok={len(oks)}/{n_req}")
+                gcs_upload_bytes(args.gcs_bucket, f"{gcs_prefix}/cluster_ltx_partial.json", json.dumps(cluster_rows, indent=2).encode("utf-8"))
+            gcs_upload_bytes(args.gcs_bucket, f"{gcs_prefix}/done_ltx_dp.txt", b"ok\n", content_type="text/plain")
+        else:
+            t_h = time.time()
+            while time.time() - t_h < 3600:
+                if gcs_download_bytes(args.gcs_bucket, f"{gcs_prefix}/done_ltx_dp.txt") is not None:
+                    break
+                time.sleep(5)
+    finally:
+        proc_ltx.terminate()
+        kill_omni_processes()
 
-    wan_t2v_workloads = [
-        {"label": "480p (832x480) 5s 81f (4-step fast)", "task": "t2v", "size": "832x480", "nf": 81, "dur": 5.0, "steps": 4, "n": 3},
-        {"label": "480p (832x480) 5s 81f (20-step)", "task": "t2v", "size": "832x480", "nf": 81, "dur": 5.0, "steps": 20, "n": 2},
-        {"label": "480p (832x480) 5s 81f (40-step full)", "task": "t2v", "size": "832x480", "nf": 81, "dur": 5.0, "steps": 40, "n": 2},
-        {"label": "720p (1280x720) 5s 81f (4-step fast)", "task": "t2v", "size": "1280x720", "nf": 81, "dur": 5.0, "steps": 4, "n": 2},
-        {"label": "720p (1280x720) 5s 81f (20-step)", "task": "t2v", "size": "1280x720", "nf": 81, "dur": 5.0, "steps": 20, "n": 2},
-        {"label": "720p (1280x720) 5s 81f (40-step full)", "task": "t2v", "size": "1280x720", "nf": 81, "dur": 5.0, "steps": 40, "n": 2},
-        {"label": "720p (1280x720) 10s 161f (20-step)", "task": "t2v", "size": "1280x720", "nf": 161, "dur": 10.0, "steps": 20, "n": 2},
-        {"label": "720p Portrait (720x1280) 5s 81f (20-step)", "task": "t2v", "size": "720x1280", "nf": 81, "dur": 5.0, "steps": 20, "n": 2},
-    ]
-
-    wan_i2v_workloads = [dict(w, task="i2v") for w in wan_t2v_workloads]
-
+    # Phase A: Remaining Single-Host Ablations across all 6 pods in parallel!
     port = 30410 + idx
     pod_rows: list[dict[str, Any]] = []
-
     if idx == 0:
-        ltx_dir = stage_single_model(idx, args.gcs_bucket, "ltx25")
+        ltx_rem = [
+            {"label": "544p (960x544) 10s 241f T2VA (8-step distill)", "task": "t2va", "size": "960x544", "nf": 241, "dur": 10.0, "steps": 8, "guidance": 1.0, "n": 2},
+            {"label": "544p (960x544) 20s 481f T2VA (8-step distill)", "task": "t2va", "size": "960x544", "nf": 481, "dur": 20.0, "steps": 8, "guidance": 1.0, "n": 2},
+            {"label": "720p (1280x704) 10s 241f T2VA (8-step distill)", "task": "t2va", "size": "1280x704", "nf": 241, "dur": 10.0, "steps": 8, "guidance": 1.0, "n": 2},
+            {"label": "720p (1280x704) 5s 121f (20-step dev CFG=3.0)", "task": "t2va", "size": "1280x704", "nf": 121, "dur": 5.0, "steps": 20, "guidance": 3.0, "n": 2},
+        ]
         run_omni_sweep(
             idx, bucket=args.gcs_bucket, gcs_prefix=gcs_prefix, pod_rows=pod_rows,
-            family="LTX-2.5", cfg_name="ltx25_omni_bf16_usp4", model_dir=ltx_dir, port=port,
-            num_chips=4, usp=4, cfg_parallel_size=1, fps=24, workloads=ltx_workloads, refs=refs,
+            family="LTX-2.5", cfg_name="ltx25_omni_bf16_usp4_long", model_dir=ltx_dir, port=port,
+            num_chips=4, usp=4, cfg_parallel_size=1, fps=24, workloads=ltx_rem, refs=refs,
         )
-        try:
-            run_omni_sweep(
-                idx, bucket=args.gcs_bucket, gcs_prefix=gcs_prefix, pod_rows=pod_rows,
-                family="LTX-2.5", cfg_name="ltx25_omni_bf16_2chip_usp2", model_dir=ltx_dir, port=port,
-                num_chips=2, usp=2, cfg_parallel_size=1, fps=24,
-                workloads=[ltx_workloads[0], ltx_workloads[2], ltx_workloads[4]], refs=refs,
-            )
-        except Exception as exc:
-            log(idx, f"Omni LTX 2-chip note: {exc}")
-
     elif idx == 1:
+        run_omni_sweep(
+            idx, bucket=args.gcs_bucket, gcs_prefix=gcs_prefix, pod_rows=pod_rows,
+            family="LTX-2.5", cfg_name="ltx25_omni_bf16_2chip_usp2", model_dir=ltx_dir, port=port,
+            num_chips=2, usp=2, cfg_parallel_size=1, fps=24,
+            workloads=[
+                {"label": "544p (960x544) 5s 121f T2VA (8-step distill)", "task": "t2va", "size": "960x544", "nf": 121, "dur": 5.0, "steps": 8, "guidance": 1.0, "n": 3},
+                {"label": "720p (1280x704) 5s 121f T2VA (8-step distill)", "task": "t2va", "size": "1280x704", "nf": 121, "dur": 5.0, "steps": 8, "guidance": 1.0, "n": 2},
+            ],
+            refs=refs,
+        )
+    elif idx == 2:
         t2v_dir = stage_single_model(idx, args.gcs_bucket, "wan22_t2v")
         run_omni_sweep(
             idx, bucket=args.gcs_bucket, gcs_prefix=gcs_prefix, pod_rows=pod_rows,
-            family="Wan2.2-T2V-A14B", cfg_name="wan22_t2v_omni_bf16_usp4", model_dir=t2v_dir, port=port,
-            num_chips=4, usp=4, cfg_parallel_size=1, fps=16, workloads=wan_t2v_workloads, refs=refs,
+            family="Wan2.2-T2V-A14B", cfg_name="wan22_t2v_omni_bf16_cfg2_usp2", model_dir=t2v_dir, port=port,
+            num_chips=4, usp=2, cfg_parallel_size=2, fps=16,
+            workloads=[
+                {"label": "480p (832x480) 5s 81f (4-step fast)", "task": "t2v", "size": "832x480", "nf": 81, "dur": 5.0, "steps": 4, "n": 3},
+                {"label": "720p (1280x720) 5s 81f (4-step fast)", "task": "t2v", "size": "1280x720", "nf": 81, "dur": 5.0, "steps": 4, "n": 2},
+                {"label": "720p (1280x720) 5s 81f (20-step)", "task": "t2v", "size": "1280x720", "nf": 81, "dur": 5.0, "steps": 20, "n": 2},
+            ],
+            refs=refs,
         )
-        try:
-            run_omni_sweep(
-                idx, bucket=args.gcs_bucket, gcs_prefix=gcs_prefix, pod_rows=pod_rows,
-                family="Wan2.2-T2V-A14B", cfg_name="wan22_t2v_omni_bf16_cfg2_usp2", model_dir=t2v_dir, port=port,
-                num_chips=4, usp=2, cfg_parallel_size=2, fps=16,
-                workloads=[wan_t2v_workloads[0], wan_t2v_workloads[3], wan_t2v_workloads[4]], refs=refs,
-            )
-        except Exception as exc:
-            log(idx, f"Omni Wan CFG=2xUSP=2 note: {exc}")
-
+    elif idx == 3:
         i2v_dir = stage_single_model(idx, args.gcs_bucket, "wan22_i2v")
         run_omni_sweep(
             idx, bucket=args.gcs_bucket, gcs_prefix=gcs_prefix, pod_rows=pod_rows,
-            family="Wan2.2-I2V-A14B", cfg_name="wan22_i2v_omni_bf16_usp4", model_dir=i2v_dir, port=port,
-            num_chips=4, usp=4, cfg_parallel_size=1, fps=16, workloads=wan_i2v_workloads, refs=refs,
+            family="Wan2.2-I2V-A14B", cfg_name="wan22_i2v_omni_bf16_usp4_480p", model_dir=i2v_dir, port=port,
+            num_chips=4, usp=4, cfg_parallel_size=1, fps=16,
+            workloads=[
+                {"label": "480p (832x480) 5s 81f (4-step fast)", "task": "i2v", "size": "832x480", "nf": 81, "dur": 5.0, "steps": 4, "n": 3},
+                {"label": "480p (832x480) 5s 81f (20-step)", "task": "i2v", "size": "832x480", "nf": 81, "dur": 5.0, "steps": 20, "n": 2},
+            ],
+            refs=refs,
+        )
+    elif idx == 4:
+        i2v_dir = stage_single_model(idx, args.gcs_bucket, "wan22_i2v")
+        run_omni_sweep(
+            idx, bucket=args.gcs_bucket, gcs_prefix=gcs_prefix, pod_rows=pod_rows,
+            family="Wan2.2-I2V-A14B", cfg_name="wan22_i2v_omni_bf16_usp4_720p", model_dir=i2v_dir, port=port,
+            num_chips=4, usp=4, cfg_parallel_size=1, fps=16,
+            workloads=[
+                {"label": "720p (1280x720) 5s 81f (4-step fast)", "task": "i2v", "size": "1280x720", "nf": 81, "dur": 5.0, "steps": 4, "n": 2},
+                {"label": "720p (1280x720) 5s 81f (20-step)", "task": "i2v", "size": "1280x720", "nf": 81, "dur": 5.0, "steps": 20, "n": 2},
+            ],
+            refs=refs,
+        )
+    elif idx == 5:
+        t2v_dir = stage_single_model(idx, args.gcs_bucket, "wan22_t2v")
+        run_omni_sweep(
+            idx, bucket=args.gcs_bucket, gcs_prefix=gcs_prefix, pod_rows=pod_rows,
+            family="Wan2.2-T2V-A14B", cfg_name="wan22_t2v_omni_bf16_usp4_10s_portrait", model_dir=t2v_dir, port=port,
+            num_chips=4, usp=4, cfg_parallel_size=1, fps=16,
+            workloads=[
+                {"label": "720p (1280x720) 10s 161f (20-step)", "task": "t2v", "size": "1280x720", "nf": 161, "dur": 10.0, "steps": 20, "n": 2},
+                {"label": "720p Portrait (720x1280) 5s 81f (20-step)", "task": "t2v", "size": "720x1280", "nf": 81, "dur": 5.0, "steps": 20, "n": 2},
+            ],
+            refs=refs,
         )
 
     gcs_upload_bytes(args.gcs_bucket, f"{gcs_prefix}/done_phaseA_pod_{idx}.txt", b"done\n", content_type="text/plain")
@@ -831,7 +913,7 @@ def main() -> None:
             break
         time.sleep(10)
 
-    # Phase B: DP=2 (8 chips) vllm-omni Cluster on Wan2.2-I2V-A14B + scaled v5p-32 (DP=8) slice sizing
+    # Phase B2: DP=6 (24 chips) vllm-omni Cluster on Wan2.2-I2V-A14B + scaled v5p-32 (DP=8) slice sizing
     i2v_dir = stage_single_model(idx, args.gcs_bucket, "wan22_i2v")
     dp_port = 30510 + idx
     proc_dp, _, _ = start_vllm_omni_server(
@@ -849,37 +931,41 @@ def main() -> None:
                         eps[i] = b.decode("utf-8").strip()
                 if len(eps) < n_pods:
                     time.sleep(3)
-            cluster_rows: list[dict[str, Any]] = []
+            act = sorted(eps.keys())
+            n_act = len(act)
             for lbl, sz, nf, dur, steps, conc, n_req in [
-                ("Wan2.2-I2V-A14B 720p 5s 81f (4-step fast, BF16)", "1280x720", 81, 5.0, 4, n_pods, n_pods * 2),
-                ("Wan2.2-I2V-A14B 720p 5s 81f (20-step, BF16)", "1280x720", 81, 5.0, 20, n_pods, n_pods * 2),
+                ("Wan2.2-I2V-A14B 480p 5s 81f (4-step fast, BF16)", "832x480", 81, 5.0, 4, n_act, n_act * 2),
+                ("Wan2.2-I2V-A14B 720p 5s 81f (4-step fast, BF16)", "1280x720", 81, 5.0, 4, n_act, n_act * 2),
+                ("Wan2.2-I2V-A14B 720p 5s 81f (20-step, BF16)", "1280x720", 81, 5.0, 20, n_act, n_act * 2),
             ]:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=n_pods) as p:
-                    list(p.map(lambda i: call_vllm_omni_sync(eps[i], {"prompt": PROMPTS[0], "size": sz, "num_frames": nf, "fps": 16, "num_inference_steps": steps, "input_reference": refs[sz], "seed": 42}), range(n_pods)))
+                if n_act == 0:
+                    continue
+                with concurrent.futures.ThreadPoolExecutor(max_workers=n_act) as p:
+                    list(p.map(lambda i: call_vllm_omni_sync(eps[i], {"prompt": PROMPTS[0], "size": sz, "num_frames": nf, "fps": 16, "num_inference_steps": steps, "input_reference": refs[sz], "seed": 42}), act))
                 t_c = time.perf_counter()
-                reqs = [(eps[r % n_pods], {"prompt": PROMPTS[r % 4], "size": sz, "num_frames": nf, "fps": 16, "num_inference_steps": steps, "input_reference": refs[sz], "seed": 6000 + r}) for r in range(n_req)]
+                reqs = [(eps[act[r % n_act]], {"prompt": PROMPTS[r % len(PROMPTS)], "size": sz, "num_frames": nf, "fps": 16, "num_inference_steps": steps, "input_reference": refs[sz], "seed": 6000 + r}) for r in range(n_req)]
                 with concurrent.futures.ThreadPoolExecutor(max_workers=conc) as p:
                     outs = list(p.map(lambda it: call_vllm_omni_sync(it[0], it[1]), reqs))
                 ws = time.perf_counter() - t_c
                 oks = [o for o in outs if o.get("ok")]
-                rpm_dp2 = round((len(oks) / ws) * 60.0, 3) if oks and ws > 0 else 0.0
-                rpm_dp8 = round(rpm_dp2 * (8.0 / n_pods), 3)
+                rpm_dp6 = round((len(oks) / ws) * 60.0, 3) if oks and ws > 0 else 0.0
+                rpm_dp8 = round(rpm_dp6 * (8.0 / n_act), 3)
                 cluster_rows.append(
                     {
                         "family": "Wan2.2-I2V-A14B",
                         "engine": "vllm-omni",
                         "precision": "BF16",
                         "workload": lbl,
-                        "dp_replicas_measured": n_pods,
-                        "chips_measured": n_pods * 4,
+                        "dp_replicas_measured": n_act,
+                        "chips_measured": n_act * 4,
                         "concurrency": conc,
                         "wall_s": round(ws, 3),
                         "median_e2e_s": round(statistics.median([o["e2e_s"] for o in oks]), 3) if oks else None,
-                        "measured_rpm": rpm_dp2,
+                        "measured_rpm": rpm_dp6,
                         "v5p32_dp8_slice_rpm": rpm_dp8,
                         "v5p32_slices_for_30_rpm": math.ceil(30.0 / rpm_dp8) if rpm_dp8 > 0 else None,
                         "video_sec_per_wall_sec_measured": round((len(oks) * dur) / ws, 3) if oks and ws > 0 else 0.0,
-                        "video_sec_per_wall_sec_v5p32": round(((len(oks) * dur) / ws) * (8.0 / n_pods), 3) if oks and ws > 0 else 0.0,
+                        "video_sec_per_wall_sec_v5p32": round(((len(oks) * dur) / ws) * (8.0 / n_act), 3) if oks and ws > 0 else 0.0,
                         "ok": f"{len(oks)}/{n_req}",
                     }
                 )

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Priority #1: MiniMax-H3 & FastH3 (4-step VSA Distilled) Video+Audio Serving Benchmark Suite on TPU v5p.
 
-Runs across the 4 Spot TPU v5p hosts in `ank-tpu-v5p-16-spot` (topology `2x2x4`, 4 physical v5p chips =
+Runs across the 4 Spot TPU v5p hosts in `tpu-v5p-16-pool` (topology `2x2x4`, 4 physical v5p chips =
 4 MegaCore PyTorch TPU devices / 380 GiB HBM2e / 440 GiB CPU RAM per host =
 16 physical v5p chips / 1,520 GiB HBM2e slice-wide):
 
@@ -942,14 +942,16 @@ def start_sglang_server(
     ulysses_degree: int,
     quantization: str | None,
     v5p_splash: bool,
-    adaln_online: bool = False,
-    ready_timeout_s: int = 900,
+    adaln_online: bool = True,
+    encoder_offload: bool = True,
+    ready_timeout_s: int = 1200,
 ) -> tuple[subprocess.Popen[Any], float, Path]:
     kill_sglang_processes()
     out_dir = Path(f"/dev/shm/sglang_out_{config_name}")
     out_dir.mkdir(parents=True, exist_ok=True)
     log_path = Path(f"/workspace/sglang_{config_name}.log")
 
+    off_val = "true" if encoder_offload else "false"
     cmd = [
         "sglang",
         "serve",
@@ -970,10 +972,10 @@ def start_sglang_server(
         "--warmup-mode",
         "off",
         "--dit-cpu-offload=false",
-        "--text-encoder-cpu-offload=false",
-        "--image-encoder-cpu-offload=false",
-        "--vae-cpu-offload=false",
-        "--offload-during-compile=false",
+        f"--text-encoder-cpu-offload={off_val}",
+        f"--image-encoder-cpu-offload={off_val}",
+        f"--vae-cpu-offload={off_val}",
+        f"--offload-during-compile={off_val}",
         "--output-path",
         str(out_dir),
     ]
@@ -1029,7 +1031,7 @@ def is_server_healthy(port: int, proc: subprocess.Popen[Any], log_path: Path) ->
 def submit_and_poll_video(
     endpoint: str,
     payload: dict[str, Any],
-    timeout_s: float = 1800.0,
+    timeout_s: float = 2400.0,
     proc: subprocess.Popen[Any] | None = None,
     log_path: Path | None = None,
 ) -> dict[str, Any]:
@@ -1042,7 +1044,7 @@ def submit_and_poll_video(
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=600) as resp:
             job = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")
@@ -1362,7 +1364,7 @@ def format_markdown_summary(
         f"# Priority #1 — MiniMax-H3 & FastH3 Video+Audio Serving on TPU v5p (`{run_id}`)",
         "",
         f"- **Updated (UTC):** `{utc_now()}`",
-        "- **Cluster / Nodepool:** `ank-tpu-v5p-usc1` / `ank-tpu-v5p-16-spot` (`2x2x4`, `4` hosts × `4` physical `v5p` chips = `16` physical chips / `16` MegaCore devices / `1,520 GiB` HBM2e)",
+        "- **Cluster / Nodepool:** `tpu-v5p-cluster` / `tpu-v5p-16-pool` (`2x2x4`, `4` hosts × `4` physical `v5p` chips = `16` physical chips / `16` MegaCore devices / `1,520 GiB` HBM2e)",
         "- **Serving Engine:** `sglang-torchtpu` (`TpuOOTPlatform`, XLA Fused SDPA vs TPU v5p Pallas SplashAttention + Ulysses Sequence Parallelism, 24 fps H.264 + 32 kHz stereo AAC muxed `.mp4`)",
         f"- **Registered Hosts:** `{json.dumps({k: v['hostname'] for k, v in sorted(nodes.items())})}`",
         "",
@@ -1403,7 +1405,7 @@ def format_markdown_summary(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--gcs-bucket", default="ank-usc1-bucket-314837540096")
+    ap.add_argument("--gcs-bucket", default="YOUR_GCS_BUCKET")
     ap.add_argument("--run-id", default="v5p16_spot_minimax_h3_serve_p1")
     args = ap.parse_args()
 
@@ -1490,7 +1492,7 @@ def main() -> None:
                 "ulysses_degree": 4,
                 "quantization": None,
                 "v5p_splash": False,
-                "adaln_online": False,
+                "adaln_online": True,
             },
             workloads=base_workloads,
             keyframes=keyframes,
@@ -1521,7 +1523,7 @@ def main() -> None:
                 "ulysses_degree": 4,
                 "quantization": "fp8",
                 "v5p_splash": False,
-                "adaln_online": False,
+                "adaln_online": True,
             },
             workloads=base_workloads,
             keyframes=keyframes,
@@ -1593,7 +1595,7 @@ def main() -> None:
                     "ulysses_degree": 4,
                     "quantization": None,
                     "v5p_splash": False,
-                    "adaln_online": False,
+                    "adaln_online": True,
                 },
                 workloads=ablation_workloads,
                 keyframes=keyframes,
@@ -1626,7 +1628,7 @@ def main() -> None:
                     "ulysses_degree": 4,
                     "quantization": None,
                     "v5p_splash": True,
-                    "adaln_online": False,
+                    "adaln_online": True,
                 },
                 workloads=ablation_workloads,
                 keyframes=keyframes,
@@ -1659,7 +1661,7 @@ def main() -> None:
                     "ulysses_degree": 2,
                     "quantization": "fp8",
                     "v5p_splash": False,
-                    "adaln_online": False,
+                    "adaln_online": True,
                 },
                 workloads=ablation_workloads,
                 keyframes=keyframes,
@@ -1697,7 +1699,7 @@ def main() -> None:
                         "ulysses_degree": 4,
                         "quantization": q_mode,
                         "v5p_splash": False,
-                        "adaln_online": False,
+                        "adaln_online": True,
                     },
                     workloads=fasth3_workloads,
                     keyframes=keyframes,

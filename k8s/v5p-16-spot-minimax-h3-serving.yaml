@@ -23,7 +23,7 @@ spec:
       restartPolicy: Never
       serviceAccountName: default
       nodeSelector:
-        cloud.google.com/gke-nodepool: ank-tpu-v5p-16-spot
+        cloud.google.com/gke-nodepool: tpu-v5p-16-pool
         cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
         cloud.google.com/gke-tpu-topology: 2x2x4
       tolerations:
@@ -38,7 +38,7 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: minimax-h3-serve
-        image: us-central1-docker.pkg.dev/diesel-patrol-382622/vllm/sglang-torchtpu-diffusion:v0.2.0
+        image: us-central1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/vllm/sglang-torchtpu-diffusion:v0.2.0
         imagePullPolicy: IfNotPresent
         env:
         - name: PJRT_DEVICE
@@ -59,10 +59,10 @@ spec:
           free -g
           TOK=$(curl -sS -H "Metadata-Flavor: Google" "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
           curl -fsSL -H "Authorization: Bearer ${TOK}" \
-            "https://storage.googleapis.com/storage/v1/b/ank-usc1-bucket-314837540096/o/v5p-video-serving-scripts%2Frun_v5p_minimax_h3_serving.py?alt=media" \
+            "https://storage.googleapis.com/storage/v1/b/YOUR_GCS_BUCKET/o/v5p-video-serving-scripts%2Frun_v5p_minimax_h3_serving.py?alt=media" \
             -o /tmp/run_v5p_minimax_h3_serving.py
           exec python3 -u /tmp/run_v5p_minimax_h3_serving.py \
-            --gcs-bucket=ank-usc1-bucket-314837540096 \
+            --gcs-bucket=YOUR_GCS_BUCKET \
             --run-id=v5p16_spot_minimax_h3_serve_p1
         resources:
           requests:
@@ -102,7 +102,7 @@ spec:
       restartPolicy: Never
       serviceAccountName: default
       nodeSelector:
-        cloud.google.com/gke-nodepool: ank-tpu-v5p-16-spot
+        cloud.google.com/gke-nodepool: tpu-v5p-16-pool
         cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
         cloud.google.com/gke-tpu-topology: 2x2x4
       tolerations:
@@ -117,7 +117,7 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: minimax-h3-serve
-        image: us-central1-docker.pkg.dev/diesel-patrol-382622/vllm/sglang-torchtpu-diffusion:v0.2.0
+        image: us-central1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/vllm/sglang-torchtpu-diffusion:v0.2.0
         imagePullPolicy: IfNotPresent
         env:
         - name: PJRT_DEVICE
@@ -138,10 +138,10 @@ spec:
           free -g
           TOK=$(curl -sS -H "Metadata-Flavor: Google" "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
           curl -fsSL -H "Authorization: Bearer ${TOK}" \
-            "https://storage.googleapis.com/storage/v1/b/ank-usc1-bucket-314837540096/o/v5p-video-serving-scripts%2Frun_v5p_minimax_h3_serving.py?alt=media" \
+            "https://storage.googleapis.com/storage/v1/b/YOUR_GCS_BUCKET/o/v5p-video-serving-scripts%2Frun_v5p_minimax_h3_serving.py?alt=media" \
             -o /tmp/run_v5p_minimax_h3_serving.py
           exec python3 -u /tmp/run_v5p_minimax_h3_serving.py \
-            --gcs-bucket=ank-usc1-bucket-314837540096 \
+            --gcs-bucket=YOUR_GCS_BUCKET \
             --run-id=v5p16_spot_minimax_h3_serve_p1
         resources:
           requests:
@@ -181,7 +181,7 @@ spec:
       restartPolicy: Never
       serviceAccountName: default
       nodeSelector:
-        cloud.google.com/gke-nodepool: ank-tpu-v5p-16-spot
+        cloud.google.com/gke-nodepool: tpu-v5p-16-pool
         cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
         cloud.google.com/gke-tpu-topology: 2x2x4
       tolerations:
@@ -196,7 +196,7 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: minimax-h3-serve
-        image: us-central1-docker.pkg.dev/diesel-patrol-382622/vllm/sglang-torchtpu-diffusion:v0.2.0
+        image: us-central1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/vllm/sglang-torchtpu-diffusion:v0.2.0
         imagePullPolicy: IfNotPresent
         env:
         - name: PJRT_DEVICE
@@ -217,10 +217,10 @@ spec:
           free -g
           TOK=$(curl -sS -H "Metadata-Flavor: Google" "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
           curl -fsSL -H "Authorization: Bearer ${TOK}" \
-            "https://storage.googleapis.com/storage/v1/b/ank-usc1-bucket-314837540096/o/v5p-video-serving-scripts%2Frun_v5p_minimax_h3_serving.py?alt=media" \
+            "https://storage.googleapis.com/storage/v1/b/YOUR_GCS_BUCKET/o/v5p-video-serving-scripts%2Frun_v5p_minimax_h3_serving.py?alt=media" \
             -o /tmp/run_v5p_minimax_h3_serving.py
           exec python3 -u /tmp/run_v5p_minimax_h3_serving.py \
-            --gcs-bucket=ank-usc1-bucket-314837540096 \
+            --gcs-bucket=YOUR_GCS_BUCKET \
             --run-id=v5p16_spot_minimax_h3_serve_p1
         resources:
           requests:
@@ -260,7 +260,7 @@ spec:
       restartPolicy: Never
       serviceAccountName: default
       nodeSelector:
-        cloud.google.com/gke-nodepool: ank-tpu-v5p-16-spot
+        cloud.google.com/gke-nodepool: tpu-v5p-16-pool
         cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
         cloud.google.com/gke-tpu-topology: 2x2x4
       tolerations:
@@ -275,7 +275,7 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: minimax-h3-serve
-        image: us-central1-docker.pkg.dev/diesel-patrol-382622/vllm/sglang-torchtpu-diffusion:v0.2.0
+        image: us-central1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/vllm/sglang-torchtpu-diffusion:v0.2.0
         imagePullPolicy: IfNotPresent
         env:
         - name: PJRT_DEVICE
@@ -296,10 +296,10 @@ spec:
           free -g
           TOK=$(curl -sS -H "Metadata-Flavor: Google" "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
           curl -fsSL -H "Authorization: Bearer ${TOK}" \
-            "https://storage.googleapis.com/storage/v1/b/ank-usc1-bucket-314837540096/o/v5p-video-serving-scripts%2Frun_v5p_minimax_h3_serving.py?alt=media" \
+            "https://storage.googleapis.com/storage/v1/b/YOUR_GCS_BUCKET/o/v5p-video-serving-scripts%2Frun_v5p_minimax_h3_serving.py?alt=media" \
             -o /tmp/run_v5p_minimax_h3_serving.py
           exec python3 -u /tmp/run_v5p_minimax_h3_serving.py \
-            --gcs-bucket=ank-usc1-bucket-314837540096 \
+            --gcs-bucket=YOUR_GCS_BUCKET \
             --run-id=v5p16_spot_minimax_h3_serve_p1
         resources:
           requests:

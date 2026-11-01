@@ -1,0 +1,307 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: v5p16-minimax-h3-r0
+  namespace: default
+  labels:
+    app: v5p-16-spot-minimax-h3-serving-p2
+    workload: v5p-video-serving-priority-1
+spec:
+  backoffLimit: 2
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+      labels:
+        app: v5p-16-spot-minimax-h3-serving-p2
+        workload: v5p-video-serving-priority-1
+        pod-idx: "0"
+    spec:
+      terminationGracePeriodSeconds: 10
+      restartPolicy: Never
+      serviceAccountName: default
+      nodeSelector:
+        cloud.google.com/gke-nodepool: tpu-v5p-16-pool
+        cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
+        cloud.google.com/gke-tpu-topology: 2x2x4
+      tolerations:
+      - key: "google.com/tpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-spot"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-queued"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: minimax-h3-serve
+        image: us-central1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/vllm/sglang-torchtpu-diffusion:v0.2.0
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: PJRT_DEVICE
+          value: "TPU"
+        - name: JOB_COMPLETION_INDEX
+          value: "0"
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+        command:
+        - bash
+        - -lc
+        - |
+          set -euo pipefail
+          TOK=$(curl -sS -H "Metadata-Flavor: Google" "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          curl -fsSL -H "Authorization: Bearer ${TOK}" \
+            "https://storage.googleapis.com/storage/v1/b/YOUR_GCS_BUCKET/o/v5p-video-serving-scripts%2Frun_v5p_minimax_h3_serving_p2.py?alt=media" \
+            -o /tmp/run_v5p_minimax_h3_serving_p2.py
+          exec python3 -u /tmp/run_v5p_minimax_h3_serving_p2.py \
+            --gcs-bucket=YOUR_GCS_BUCKET \
+            --run-id=v5p16_spot_minimax_h3_serve_p2
+        resources:
+          requests:
+            google.com/tpu: "4"
+          limits:
+            google.com/tpu: "4"
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: v5p16-minimax-h3-r1
+  namespace: default
+  labels:
+    app: v5p-16-spot-minimax-h3-serving-p2
+    workload: v5p-video-serving-priority-1
+spec:
+  backoffLimit: 2
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+      labels:
+        app: v5p-16-spot-minimax-h3-serving-p2
+        workload: v5p-video-serving-priority-1
+        pod-idx: "1"
+    spec:
+      terminationGracePeriodSeconds: 10
+      restartPolicy: Never
+      serviceAccountName: default
+      nodeSelector:
+        cloud.google.com/gke-nodepool: tpu-v5p-16-pool
+        cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
+        cloud.google.com/gke-tpu-topology: 2x2x4
+      tolerations:
+      - key: "google.com/tpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-spot"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-queued"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: minimax-h3-serve
+        image: us-central1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/vllm/sglang-torchtpu-diffusion:v0.2.0
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: PJRT_DEVICE
+          value: "TPU"
+        - name: JOB_COMPLETION_INDEX
+          value: "1"
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+        command:
+        - bash
+        - -lc
+        - |
+          set -euo pipefail
+          TOK=$(curl -sS -H "Metadata-Flavor: Google" "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          curl -fsSL -H "Authorization: Bearer ${TOK}" \
+            "https://storage.googleapis.com/storage/v1/b/YOUR_GCS_BUCKET/o/v5p-video-serving-scripts%2Frun_v5p_minimax_h3_serving_p2.py?alt=media" \
+            -o /tmp/run_v5p_minimax_h3_serving_p2.py
+          exec python3 -u /tmp/run_v5p_minimax_h3_serving_p2.py \
+            --gcs-bucket=YOUR_GCS_BUCKET \
+            --run-id=v5p16_spot_minimax_h3_serve_p2
+        resources:
+          requests:
+            google.com/tpu: "4"
+          limits:
+            google.com/tpu: "4"
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: v5p16-minimax-h3-r2
+  namespace: default
+  labels:
+    app: v5p-16-spot-minimax-h3-serving-p2
+    workload: v5p-video-serving-priority-1
+spec:
+  backoffLimit: 2
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+      labels:
+        app: v5p-16-spot-minimax-h3-serving-p2
+        workload: v5p-video-serving-priority-1
+        pod-idx: "2"
+    spec:
+      terminationGracePeriodSeconds: 10
+      restartPolicy: Never
+      serviceAccountName: default
+      nodeSelector:
+        cloud.google.com/gke-nodepool: tpu-v5p-16-pool
+        cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
+        cloud.google.com/gke-tpu-topology: 2x2x4
+      tolerations:
+      - key: "google.com/tpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-spot"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-queued"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: minimax-h3-serve
+        image: us-central1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/vllm/sglang-torchtpu-diffusion:v0.2.0
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: PJRT_DEVICE
+          value: "TPU"
+        - name: JOB_COMPLETION_INDEX
+          value: "2"
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+        command:
+        - bash
+        - -lc
+        - |
+          set -euo pipefail
+          TOK=$(curl -sS -H "Metadata-Flavor: Google" "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          curl -fsSL -H "Authorization: Bearer ${TOK}" \
+            "https://storage.googleapis.com/storage/v1/b/YOUR_GCS_BUCKET/o/v5p-video-serving-scripts%2Frun_v5p_minimax_h3_serving_p2.py?alt=media" \
+            -o /tmp/run_v5p_minimax_h3_serving_p2.py
+          exec python3 -u /tmp/run_v5p_minimax_h3_serving_p2.py \
+            --gcs-bucket=YOUR_GCS_BUCKET \
+            --run-id=v5p16_spot_minimax_h3_serve_p2
+        resources:
+          requests:
+            google.com/tpu: "4"
+          limits:
+            google.com/tpu: "4"
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: v5p16-minimax-h3-r3
+  namespace: default
+  labels:
+    app: v5p-16-spot-minimax-h3-serving-p2
+    workload: v5p-video-serving-priority-1
+spec:
+  backoffLimit: 2
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+      labels:
+        app: v5p-16-spot-minimax-h3-serving-p2
+        workload: v5p-video-serving-priority-1
+        pod-idx: "3"
+    spec:
+      terminationGracePeriodSeconds: 10
+      restartPolicy: Never
+      serviceAccountName: default
+      nodeSelector:
+        cloud.google.com/gke-nodepool: tpu-v5p-16-pool
+        cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
+        cloud.google.com/gke-tpu-topology: 2x2x4
+      tolerations:
+      - key: "google.com/tpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-spot"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "cloud.google.com/gke-queued"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: minimax-h3-serve
+        image: us-central1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/vllm/sglang-torchtpu-diffusion:v0.2.0
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: PJRT_DEVICE
+          value: "TPU"
+        - name: JOB_COMPLETION_INDEX
+          value: "3"
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+        command:
+        - bash
+        - -lc
+        - |
+          set -euo pipefail
+          TOK=$(curl -sS -H "Metadata-Flavor: Google" "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          curl -fsSL -H "Authorization: Bearer ${TOK}" \
+            "https://storage.googleapis.com/storage/v1/b/YOUR_GCS_BUCKET/o/v5p-video-serving-scripts%2Frun_v5p_minimax_h3_serving_p2.py?alt=media" \
+            -o /tmp/run_v5p_minimax_h3_serving_p2.py
+          exec python3 -u /tmp/run_v5p_minimax_h3_serving_p2.py \
+            --gcs-bucket=YOUR_GCS_BUCKET \
+            --run-id=v5p16_spot_minimax_h3_serve_p2
+        resources:
+          requests:
+            google.com/tpu: "4"
+          limits:
+            google.com/tpu: "4"
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory

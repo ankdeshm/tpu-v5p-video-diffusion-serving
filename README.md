@@ -86,9 +86,9 @@ To serve a production SLA of **30 Requests Per Minute (RPM)**, the required clus
 │   ├── run_v5p_ltx25_wan22_omni.py                    # v5p-32: LTX-2.5 & Wan 2.2 serving harness for vllm-omni
 │   └── run_v5p_ltx25_wan22_sglang.py                  # v5p-32: LTX-2.5 & Wan 2.2 serving harness for sglang-torchtpu
 ├── k8s/
-│   ├── v5p-16-spot-minimax-h3-serving.yaml            # Indexed Job (4x4=16 v5p chips) on ank-tpu-v5p-16-spot
-│   ├── v5p-32-spot-omni-serving.yaml                  # Indexed Job on ank-tpu-v5p-32-spot for vllm-omni comparative serving
-│   └── v5p-32-spot-sglang-serving.yaml                # Indexed Job on ank-tpu-v5p-32-spot for sglang-torchtpu
+│   ├── v5p-16-spot-minimax-h3-serving.yaml            # Indexed Job (4x4=16 v5p chips) on tpu-v5p-16-pool
+│   ├── v5p-32-spot-omni-serving.yaml                  # Indexed Job on tpu-v5p-32-pool for vllm-omni comparative serving
+│   └── v5p-32-spot-sglang-serving.yaml                # Indexed Job on tpu-v5p-32-pool for sglang-torchtpu
 └── results/
     ├── v5p16_spot_minimax_h3_serve_p1/                # MiniMax-H3 / FastH3 pod and node execution results
     ├── v5p32_spot_omni_serve_p23/                     # vLLM-Omni LTX-2.5 & Wan 2.2 pod and node results
@@ -101,12 +101,12 @@ To serve a production SLA of **30 Requests Per Minute (RPM)**, the required clus
 
 ```bash
 # 1. Upload serving benchmark harnesses to regional GCS
-CLOUDSDK_METRICS_ENVIRONMENT=datacloud.antigravity gcloud storage cp scripts/run_v5p_*.py gs://ank-usc1-bucket-314837540096/v5p-video-serving-scripts/
+CLOUDSDK_METRICS_ENVIRONMENT=datacloud.antigravity gcloud storage cp scripts/run_v5p_*.py gs://YOUR_GCS_BUCKET/v5p-video-serving-scripts/
 
-# 2. Run MiniMax-H3 (FL2VA i2v + t2va) & FastH3 on ank-tpu-v5p-16-spot (4 hosts = 16 v5p chips)
-CLOUDSDK_METRICS_ENVIRONMENT=datacloud.antigravity kubectl --context=gke_diesel-patrol-382622_us-central1_ank-tpu-v5p-usc1 apply -f k8s/v5p-16-spot-minimax-h3-serving.yaml
+# 2. Run MiniMax-H3 (FL2VA i2v + t2va) & FastH3 on tpu-v5p-16-pool (4 hosts = 16 v5p chips)
+CLOUDSDK_METRICS_ENVIRONMENT=datacloud.antigravity kubectl --context=gke_YOUR_GCP_PROJECT_ID_us-central1_tpu-v5p-cluster apply -f k8s/v5p-16-spot-minimax-h3-serving.yaml
 
-# 3. Run LTX-2.5 & Wan 2.2 comparative serving on ank-tpu-v5p-32-spot (8 hosts = 32 v5p chips)
-CLOUDSDK_METRICS_ENVIRONMENT=datacloud.antigravity kubectl --context=gke_diesel-patrol-382622_us-central1_ank-tpu-v5p-usc1 apply -f k8s/v5p-32-spot-sglang-serving.yaml
-CLOUDSDK_METRICS_ENVIRONMENT=datacloud.antigravity kubectl --context=gke_diesel-patrol-382622_us-central1_ank-tpu-v5p-usc1 apply -f k8s/v5p-32-spot-omni-serving.yaml
+# 3. Run LTX-2.5 & Wan 2.2 comparative serving on tpu-v5p-32-pool (8 hosts = 32 v5p chips)
+CLOUDSDK_METRICS_ENVIRONMENT=datacloud.antigravity kubectl --context=gke_YOUR_GCP_PROJECT_ID_us-central1_tpu-v5p-cluster apply -f k8s/v5p-32-spot-sglang-serving.yaml
+CLOUDSDK_METRICS_ENVIRONMENT=datacloud.antigravity kubectl --context=gke_YOUR_GCP_PROJECT_ID_us-central1_tpu-v5p-cluster apply -f k8s/v5p-32-spot-omni-serving.yaml
 ```

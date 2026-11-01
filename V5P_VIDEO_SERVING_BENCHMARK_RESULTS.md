@@ -1,16 +1,16 @@
 # TPU v5p Video + Audio Diffusion Serving Benchmark Report
 
 - **Date:** October 31, 2026
-- **Cluster:** Cluster 1 (`gke_diesel-patrol-382622_us-central1_ank-tpu-v5p-usc1`)
+- **Cluster:** Cluster 1 (`gke_YOUR_GCP_PROJECT_ID_us-central1_tpu-v5p-cluster`)
 - **Nodepools:**
-  - `ank-tpu-v5p-16-spot` (`4` hosts = `16` `v5p` physical chips / `32` TensorCores, topology `2x2x4`)
-  - `ank-tpu-v5p-32-spot` (`8` hosts = `32` `v5p` physical chips / `64` TensorCores, topology `2x4x4`)
+  - `tpu-v5p-16-pool` (`4` hosts = `16` `v5p` physical chips / `32` TensorCores, topology `2x2x4`)
+  - `tpu-v5p-32-pool` (`8` hosts = `32` `v5p` physical chips / `64` TensorCores, topology `2x4x4`)
 - **Evaluated Serving Engines:** `vllm-omni` (v0.32.0-tpu) vs `sglang-torchtpu` (v0.2.0-diffusion)
 - **Evaluated Models:**
   - **LTX-2.5** (`22B` Video + Audio DiT; 8-step distilled and multi-stage)
   - **Wan2.2-T2V-A14B & Wan2.2-I2V-A14B** (`14B` High-Quality Diffusion Transformers)
   - **MiniMax-H3 (FL2VA)** (`33.14B` Omni-Modal Video + Audio DiT) & **FastH3** (4-step VSA Distill)
-- **Cross-Generation Baseline:** TPU `v7x-16` (`ank-tpu-v7x-16-pool`, Steady Flex, `16` physical chips / `32` TensorCores / `3,072 GiB` HBM3e)
+- **Cross-Generation Baseline:** TPU `v7x-16` (`tpu-v7x-16-pool`, Steady Flex, `16` physical chips / `32` TensorCores / `3,072 GiB` HBM3e)
 
 ---
 
@@ -65,19 +65,19 @@ To satisfy a target production throughput of **30 Requests Per Minute (30 RPM)**
 
 | Model Architecture | Workload Profile | Measured Host RPM | Target Cluster RPM | Required Host Count | Required `v5p` Chips | Required TensorCores | Recommended Nodepool Topology |
 |---|---|---:|---:|---:|---:|---:|---|
-| **LTX-2.5 (T2VA)** | 544p 5s 121f (8-step) | 12.93 | 30.0 | **3 hosts** | **12 chips** | 24 cores | `ank-tpu-v5p-16-spot` (`2x2x4`) |
-| **LTX-2.5 (I2VA)** | 544p 5s 121f (8-step) | 12.97 | 30.0 | **3 hosts** | **12 chips** | 24 cores | `ank-tpu-v5p-16-spot` (`2x2x4`) |
-| **LTX-2.5 (T2VA)** | 720p 5s 121f (8-step) | 8.13 | 30.0 | **4 hosts** | **16 chips** | 32 cores | `ank-tpu-v5p-16-spot` (`2x2x4`) |
-| **Wan2.2-T2V-A14B** | 480p 5s 81f (4-step fast) | 2.27 | 30.0 | **14 hosts** | **56 chips** | 112 cores | `ank-tpu-v5p-64-spot` (`4x4x4`) |
-| **Wan2.2-T2V-A14B** | 720p 5s 81f (4-step fast) | 1.34 | 30.0 | **23 hosts** | **92 chips** | 184 cores | `ank-tpu-v5p-128-spot` (`4x4x8`) |
-| **Wan2.2-T2V-A14B** | 480p 5s 81f (20-step hifi)| 0.50 | 30.0 | **60 hosts** | **240 chips** | 480 cores | `ank-tpu-v5p-256-spot` (`4x8x8`) |
-| **MiniMax-H3 (FL2VA)**| 768p 15s (4-step, v7x baseline) | 0.34 | 30.0 | **89 hosts** | **356 chips** | 712 cores | `ank-tpu-v5p-512-spot` (`8x8x8`) |
+| **LTX-2.5 (T2VA)** | 544p 5s 121f (8-step) | 12.93 | 30.0 | **3 hosts** | **12 chips** | 24 cores | `tpu-v5p-16-pool` (`2x2x4`) |
+| **LTX-2.5 (I2VA)** | 544p 5s 121f (8-step) | 12.97 | 30.0 | **3 hosts** | **12 chips** | 24 cores | `tpu-v5p-16-pool` (`2x2x4`) |
+| **LTX-2.5 (T2VA)** | 720p 5s 121f (8-step) | 8.13 | 30.0 | **4 hosts** | **16 chips** | 32 cores | `tpu-v5p-16-pool` (`2x2x4`) |
+| **Wan2.2-T2V-A14B** | 480p 5s 81f (4-step fast) | 2.27 | 30.0 | **14 hosts** | **56 chips** | 112 cores | `tpu-v5p-64-spot` (`4x4x4`) |
+| **Wan2.2-T2V-A14B** | 720p 5s 81f (4-step fast) | 1.34 | 30.0 | **23 hosts** | **92 chips** | 184 cores | `tpu-v5p-128-spot` (`4x4x8`) |
+| **Wan2.2-T2V-A14B** | 480p 5s 81f (20-step hifi)| 0.50 | 30.0 | **60 hosts** | **240 chips** | 480 cores | `tpu-v5p-256-spot` (`4x8x8`) |
+| **MiniMax-H3 (FL2VA)**| 768p 15s (4-step, v7x baseline) | 0.34 | 30.0 | **89 hosts** | **356 chips** | 712 cores | `tpu-v5p-512-spot` (`8x8x8`) |
 
 ---
 
 ## 4. Cross-Generation Architectural Comparison: TPU `v7x` vs TPU `v5p`
 
-The cross-generation benchmark compares TPU `v7x` (`ank-tpu-v7x-16-pool`) against TPU `v5p` (`ank-tpu-v5p-32-spot` and `ank-tpu-v5p-16-spot`).
+The cross-generation benchmark compares TPU `v7x` (`tpu-v7x-16-pool`) against TPU `v5p` (`tpu-v5p-32-pool` and `tpu-v5p-16-pool`).
 
 ### 4.1 Head-to-Head Specification
 

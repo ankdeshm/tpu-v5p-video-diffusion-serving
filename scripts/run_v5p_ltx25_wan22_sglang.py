@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Priority #2 & #3 (SGLang Engine): LTX-2.5 & Wan 2.2 (T2V-A14B / I2V-A14B) Serving Benchmark Suite on TPU v5p.
 
-Runs across 6 Spot TPU v5p hosts in `ank-tpu-v5p-32-spot` (topology `2x4x4`, 4 physical v5p chips =
+Runs across 6 Spot TPU v5p hosts in `tpu-v5p-32-pool` (topology `2x4x4`, 4 physical v5p chips =
 4 MegaCore PyTorch TPU devices / 380 GiB HBM2e / 440 GiB CPU RAM per host = 24 v5p chips across 6 hosts,
 running concurrently alongside the 2 `vllm-omni` hosts on the remaining 8 v5p chips of the 32-chip slice):
 
@@ -1046,7 +1046,7 @@ def run_wan_workloads(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--gcs-bucket", default="ank-usc1-bucket-314837540096")
+    ap.add_argument("--gcs-bucket", default="YOUR_GCS_BUCKET")
     ap.add_argument("--run-id", default="v5p32_spot_sglang_serve_p23")
     ap.add_argument("--num-pods", type=int, default=6)
     args = ap.parse_args()
@@ -1288,29 +1288,34 @@ def main() -> None:
                             eps[i] = b.decode("utf-8").strip()
                     if len(eps) < n_pods:
                         time.sleep(3)
+                act = sorted(eps.keys())
+                n_act = len(act)
                 for lbl, sz, nf, dur, steps, conc, n_req in b1_suites:
-                    log(0, f"[Cluster DP={n_pods}] Warming all {n_pods} hosts on {lbl}...")
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=n_pods) as p:
-                        w_outs = list(p.map(lambda i: call_sglang_video(eps[i], {"prompt": PROMPTS[0], "size": sz, "num_frames": nf, "fps": 24, "num_inference_steps": steps, "guidance_scale": 1.0, "use_diffusion_decoder": False, "generator_device": "cpu", "seed": 42}), range(n_pods)))
+                    if n_act == 0:
+                        cluster_rows.append({"family": "LTX-2.5", "workload": lbl, "dp_replicas": 0, "chips": 0, "concurrency": conc, "ok": f"0/{n_req}", "error": "no ready endpoints"})
+                        continue
+                    log(0, f"[Cluster DP={n_act}] Warming all {n_act} active hosts on {lbl}...")
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=n_act) as p:
+                        w_outs = list(p.map(lambda i: call_sglang_video(eps[i], {"prompt": PROMPTS[0], "size": sz, "num_frames": nf, "fps": 24, "num_inference_steps": steps, "guidance_scale": 1.0, "use_diffusion_decoder": False, "generator_device": "cpu", "seed": 42}), act))
                     if not any(w.get("ok") for w in w_outs):
-                        cluster_rows.append({"family": "LTX-2.5", "workload": lbl, "dp_replicas": n_pods, "chips": n_pods * 4, "concurrency": conc, "ok": f"0/{n_req}", "error": w_outs[0].get("error")})
+                        cluster_rows.append({"family": "LTX-2.5", "workload": lbl, "dp_replicas": n_act, "chips": n_act * 4, "concurrency": conc, "ok": f"0/{n_req}", "error": w_outs[0].get("error")})
                         continue
                     t_c = time.perf_counter()
-                    reqs = [(eps[r % n_pods], {"prompt": PROMPTS[r % 4], "size": sz, "num_frames": nf, "fps": 24, "num_inference_steps": steps, "guidance_scale": 1.0, "use_diffusion_decoder": False, "generator_device": "cpu", "seed": 900 + r}) for r in range(n_req)]
+                    reqs = [(eps[act[r % n_act]], {"prompt": PROMPTS[r % 4], "size": sz, "num_frames": nf, "fps": 24, "num_inference_steps": steps, "guidance_scale": 1.0, "use_diffusion_decoder": False, "generator_device": "cpu", "seed": 900 + r}) for r in range(n_req)]
                     with concurrent.futures.ThreadPoolExecutor(max_workers=conc) as p:
                         outs = list(p.map(lambda it: call_sglang_video(it[0], it[1]), reqs))
                     ws = time.perf_counter() - t_c
                     oks = [o for o in outs if o.get("ok")]
                     rpm_dp6 = round((len(oks) / ws) * 60.0, 3) if oks and ws > 0 else 0.0
-                    rpm_dp8_slice = round(rpm_dp6 * (8.0 / n_pods), 3)
+                    rpm_dp8_slice = round(rpm_dp6 * (8.0 / n_act), 3)
                     cluster_rows.append(
                         {
                             "family": "LTX-2.5",
                             "engine": "sglang-torchtpu",
                             "pipeline": pipe_cls or "LTX2Pipeline",
                             "workload": lbl,
-                            "dp_replicas_measured": n_pods,
-                            "chips_measured": n_pods * 4,
+                            "dp_replicas_measured": n_act,
+                            "chips_measured": n_act * 4,
                             "concurrency": conc,
                             "wall_s": round(ws, 3),
                             "median_e2e_s": round(statistics.median([o["e2e_s"] for o in oks]), 3) if oks else None,
@@ -1318,11 +1323,11 @@ def main() -> None:
                             "v5p32_dp8_slice_rpm": rpm_dp8_slice,
                             "v5p32_slices_for_30_rpm": math.ceil(30.0 / rpm_dp8_slice) if rpm_dp8_slice > 0 else None,
                             "video_sec_per_wall_sec_measured": round((len(oks) * dur) / ws, 3) if oks and ws > 0 else 0.0,
-                            "video_sec_per_wall_sec_v5p32": round(((len(oks) * dur) / ws) * (8.0 / n_pods), 3) if oks and ws > 0 else 0.0,
+                            "video_sec_per_wall_sec_v5p32": round(((len(oks) * dur) / ws) * (8.0 / n_act), 3) if oks and ws > 0 else 0.0,
                             "ok": f"{len(oks)}/{n_req}",
                         }
                     )
-                    log(0, f"[Cluster DP={n_pods}] DONE {lbl} c={conc}: RPM(DP={n_pods})={rpm_dp6} -> v5p-32(DP=8)={rpm_dp8_slice} vids/min")
+                    log(0, f"[Cluster DP={n_act}] DONE {lbl} c={conc}: RPM(DP={n_act})={rpm_dp6} -> v5p-32(DP=8)={rpm_dp8_slice} vids/min")
                 gcs_upload_bytes(args.gcs_bucket, f"{gcs_prefix}/done_{b1_tag}.txt", b"ok\n", content_type="text/plain")
             else:
                 t_h = time.time()
@@ -1353,43 +1358,47 @@ def main() -> None:
                         eps[i] = b.decode("utf-8").strip()
                 if len(eps) < n_pods:
                     time.sleep(3)
+            act = sorted(eps.keys())
+            n_act = len(act)
             for lbl, sz, nf, dur, steps, conc, n_req in [
                 ("Wan2.2-I2V-A14B 720p 5s 81f (4-step fast, FP8)", "1280x720", 81, 5.0, 4, n_pods, n_pods * 2),
                 ("Wan2.2-I2V-A14B 720p 5s 81f (4-step fast, FP8)", "1280x720", 81, 5.0, 4, n_pods * 2, n_pods * 3),
                 ("Wan2.2-I2V-A14B 720p 5s 81f (20-step, FP8)", "1280x720", 81, 5.0, 20, n_pods, n_pods),
                 ("Wan2.2-I2V-A14B 720p 5s 81f (20-step, FP8)", "1280x720", 81, 5.0, 20, n_pods * 2, n_pods * 2),
             ]:
-                log(0, f"[Cluster DP={n_pods}] Warming all {n_pods} hosts on {lbl}...")
-                with concurrent.futures.ThreadPoolExecutor(max_workers=n_pods) as p:
-                    list(p.map(lambda i: call_sglang_video(eps[i], {"prompt": PROMPTS[0], "size": sz, "num_frames": nf, "fps": 16, "num_inference_steps": steps, "input_reference": refs[sz], "generator_device": "cpu", "seed": 42}), range(n_pods)))
+                if n_act == 0:
+                    continue
+                log(0, f"[Cluster DP={n_act}] Warming all {n_act} active hosts on {lbl}...")
+                with concurrent.futures.ThreadPoolExecutor(max_workers=n_act) as p:
+                    list(p.map(lambda i: call_sglang_video(eps[i], {"prompt": PROMPTS[0], "size": sz, "num_frames": nf, "fps": 16, "num_inference_steps": steps, "input_reference": refs[sz], "generator_device": "cpu", "seed": 42}), act))
                 t_c = time.perf_counter()
-                reqs = [(eps[r % n_pods], {"prompt": PROMPTS[r % 4], "size": sz, "num_frames": nf, "fps": 16, "num_inference_steps": steps, "input_reference": refs[sz], "generator_device": "cpu", "seed": 3000 + r}) for r in range(n_req)]
+                reqs = [(eps[act[r % n_act]], {"prompt": PROMPTS[r % 4], "size": sz, "num_frames": nf, "fps": 16, "num_inference_steps": steps, "input_reference": refs[sz], "generator_device": "cpu", "seed": 3000 + r}) for r in range(n_req)]
                 with concurrent.futures.ThreadPoolExecutor(max_workers=conc) as p:
                     outs = list(p.map(lambda it: call_sglang_video(it[0], it[1]), reqs))
                 ws = time.perf_counter() - t_c
                 oks = [o for o in outs if o.get("ok")]
                 rpm_dp6 = round((len(oks) / ws) * 60.0, 3) if oks and ws > 0 else 0.0
-                rpm_dp8_slice = round(rpm_dp6 * (8.0 / n_pods), 3)
+                rpm_dp8_slice = round(rpm_dp6 * (8.0 / n_act), 3)
                 cluster_rows.append(
                     {
                         "family": "Wan2.2-I2V-A14B",
                         "engine": "sglang-torchtpu",
                         "precision": "FP8 (online)",
                         "workload": lbl,
-                        "dp_replicas_measured": n_pods,
-                        "chips_measured": n_pods * 4,
+                        "dp_replicas_measured": n_act,
+                        "chips_measured": n_act * 4,
                         "concurrency": conc,
                         "wall_s": round(ws, 3),
-                        "median_e2e_s": round(statistics.median([o["e2e_s"] for o in oks]), 3) if oks else None,
+                        "median_e2e_s": round(statistics.median([o["e2e_s"] for o in oks]), 3) if oks and len(oks) > 0 else None,
                         "measured_rpm": rpm_dp6,
                         "v5p32_dp8_slice_rpm": rpm_dp8_slice,
                         "v5p32_slices_for_30_rpm": math.ceil(30.0 / rpm_dp8_slice) if rpm_dp8_slice > 0 else None,
                         "video_sec_per_wall_sec_measured": round((len(oks) * dur) / ws, 3) if oks and ws > 0 else 0.0,
-                        "video_sec_per_wall_sec_v5p32": round(((len(oks) * dur) / ws) * (8.0 / n_pods), 3) if oks and ws > 0 else 0.0,
+                        "video_sec_per_wall_sec_v5p32": round(((len(oks) * dur) / ws) * (8.0 / n_act), 3) if oks and ws > 0 else 0.0,
                         "ok": f"{len(oks)}/{n_req}",
                     }
                 )
-                log(0, f"[Cluster DP={n_pods}] DONE {lbl} c={conc}: RPM(DP={n_pods})={rpm_dp6} -> v5p-32(DP=8)={rpm_dp8_slice} vids/min")
+                log(0, f"[Cluster DP={n_act}] DONE {lbl} c={conc}: RPM(DP={n_act})={rpm_dp6} -> v5p-32(DP=8)={rpm_dp8_slice} vids/min")
 
             all_host = []
             for i in range(n_pods):
