@@ -49,5 +49,39 @@
     "video_sec_per_wall_sec_measured": 4.047,
     "video_sec_per_wall_sec_v5p32": 5.396,
     "ok": "18/18"
+  },
+  {
+    "family": "LTX-2.5",
+    "engine": "vllm-omni",
+    "precision": "BF16",
+    "workload": "LTX-2.5 720p (1280x704) 5s 121f T2VA (8-step)",
+    "dp_replicas_measured": 6,
+    "chips_measured": 24,
+    "concurrency": 12,
+    "wall_s": 28.527,
+    "median_e2e_s": 13.86,
+    "measured_rpm": 50.478,
+    "v5p32_dp8_slice_rpm": 67.304,
+    "v5p32_slices_for_30_rpm": 1,
+    "video_sec_per_wall_sec_measured": 4.207,
+    "video_sec_per_wall_sec_v5p32": 5.609,
+    "ok": "24/24"
+  },
+  {
+    "family": "LTX-2.5",
+    "engine": "vllm-omni",
+    "precision": "BF16",
+    "workload": "LTX-2.5 544p (960x544) 10s 241f T2VA (8-step)",
+    "dp_replicas_measured": 6,
+    "chips_measured": 24,
+    "concurrency": 6,
+    "wall_s": 17.549,
+    "median_e2e_s": 8.715,
+    "measured_rpm": 41.027,
+    "v5p32_dp8_slice_rpm": 54.703,
+    "v5p32_slices_for_30_rpm": 1,
+    "video_sec_per_wall_sec_measured": 6.838,
+    "video_sec_per_wall_sec_v5p32": 9.117,
+    "ok": "12/12"
   }
 ]
