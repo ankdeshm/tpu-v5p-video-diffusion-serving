@@ -26,13 +26,13 @@
    - **`Wan2.2-I2V-A14B` Image-to-Video (`USP=4`, `vllm-omni`):** Generated **480p 5s 81f (4-step) in `28.049s` (`2.184 RPM/host`)** (`164.01s` at 20-step) and **720p 5s 81f (4-step) in `59.813s` (`1.003 RPM/host`)** (`202.25s` at 20-step), plus 720p 10s 161f (`599.20s`) and 720p Portrait `720x1280` (`203.89s`).
    - **`sglang-torchtpu`:** Generated Wan2.2-T2V 480p 4-step in **`33.09s` (`1.82 RPM/host`)** and excelled on deep 20-step (`118.54s`) and 40-step (`226.20s`) schedules.
 
-3. **Resident `MiniMax-H3` (`33.14B` Omni-Modal DiT, `144 GB` BF16) Unlocked on Single 4-Chip TPU `v5p` Host:**
-   - With our `--minimax-h3-adaln-online` + Qwen3-VL / VDN / CPU AudioDecode patches and selective encoder/VAE CPU offload (`--dit-cpu-offload=false`), **`MiniMax-H3 (FL2VA)` ran 100% resident on a single 4-chip `v5p` host (`70.27 GB` peak HBM)**, generating **15-second `1344x768` (768p 16:9) video+audio (`i2v`, 4-step) in `458.692s` warm median (`0.131 RPM/host`, `11.13 MB` MP4 verified)** vs **`175.51s` (`0.342 RPM/host`)** on 4-chip TPU `v7x` (`2.61x` Ironwood speedup from HBM3e bandwidth + FP8 MXUs).
+3. **Resident `MiniMax-H3` (`33.14B` Omni-Modal DiT, `144 GB` BF16) Unlocked & Accelerated on Single 4-Chip TPU `v5p` Host (`389.36s` 15s HD!):**
+   - With our Qwen3-VL / VDN / CPU AudioDecode patches and selective encoder/VAE CPU offload (`--dit-cpu-offload=false`), **`MiniMax-H3 (FL2VA)` ran 100% resident on a single 4-chip `v5p` host (`70.27 GB` peak HBM)**! Removing AdaLN-online recompute (`mh3_bf16_u4_sdpa`) accelerated **15-second `1344x768` (768p 16:9) video+audio (`i2v`, 4-step) from `458.69s` -> `389.363s` warm median (`0.154 RPM/host`, `+17.8%` faster, `11.13 MB` MP4 verified)** vs **`175.51s` (`0.342 RPM/host`)** on 4-chip TPU `v7x` (`2.22x` Ironwood speedup). In addition, **5-second `1344x768` (`4`-step)** completed in **`291.180s` (`0.206 RPM/host`, `58.19 GB` HBM)**, and **full `25`-step 15-second `1344x768` HD** completed in **`952.301s` (`37.94s/denoise-step`, `0.063 RPM/host`, `71.96 GB` HBM)**!
 
 4. **Critical Serving Fixes Discovered & Upstreamed:**
    - **LTX-2.5 Sequence Parallel Auto-Padding:** Configured `auto_pad=True` in `SequenceParallelInput` to support non-divisible latent token counts (e.g. `31,110` tokens for `960x544` across `USP=4`).
    - **PyAV Audio Resampler Chunking:** Fixed PyAV `avcodec_send_frame()` `EINVAL` (`errno 22`) during stereo MP4 muxing via `av.AudioResampler` `1024`-sample AAC packet framing.
-   - **MiniMax-H3 Online AdaLN & Int32/MRoPE TPU Lowering:** Applied 9 runtime patches enabling full `1344x768` 15s `FL2VA` execution inside `95 GiB` `v5p` HBM (`70.27 GB` peak).
+   - **MiniMax-H3 Precomputed vs Online AdaLN & Int32/MRoPE TPU Lowering:** Applied 9 runtime patches enabling full `1344x768` 15s `FL2VA` execution inside `95 GiB` `v5p` HBM (`70.27 GB` peak), proving precomputed AdaLN (`mh3_bf16_u4_sdpa`, `389.36s`) fits cleanly alongside selective encoder/VAE offload and beats AdaLN-online (`458.69s`) by `69.3s` per clip.
 
 ---
 
@@ -47,7 +47,7 @@ Single-host configurations below utilize **1 host = 4 physical `v5p` chips** (or
 | **LTX-2.5 (I2VA)** | `vllm-omni` | BF16 | U=4 (4 chips) | 544p (960x544) | 5.0s / 121f | 8 | 22.42 | **4.624** | 578.0 | **12.97 / host** | 1.081x | Verified OK |
 | **LTX-2.5 (T2VA)** | `vllm-omni` | BF16 | U=4 (4 chips) | 544p (960x544) | 5.0s / 121f | 8 | 87.66 | **4.684** | 585.5 | **12.93 / host** | 1.068x | Verified OK |
 | **LTX-2.5 (T2VA)** | `vllm-omni` | BF16 | **U=2 (2 chips)** | 544p (960x544) | 5.0s / 121f | 8 | 91.10 | **6.931** | 866.4 | **8.65 / rep (`17.30 / host`)** | 0.721x | Verified OK |
-| **LTX-2.5 (T2VA)** | `vllm-omni` | BF16 | U=4 (4 chips) | 544p (960x544) | **10.0s / 241f** | 8 | 10.87 | **8.694** | 1086.8 | **6.90 / host** | **1.150x** | Verified OK |
+| **LTX-2.5 (T2VA)** | `vllm-omni` | BF16 | U=4 (4 chips) | 544p (960x544) | **10.0s / 241f** | 8 | 11.13 | **8.681** | 1085.1 | **6.91 / host** | **1.152x** | Verified OK |
 | **LTX-2.5 (T2VA)** | `vllm-omni` | BF16 | U=4 (4 chips) | 720p (1280x704) | 5.0s / 121f | 8 | 82.46 | **7.383** | 922.9 | **8.13 / host** | 0.677x | Verified OK |
 | **LTX-2.5 (T2VA)** | `vllm-omni` | BF16 | **U=2 (2 chips)** | 720p (1280x704) | 5.0s / 121f | 8 | 88.40 | **12.200** | 1525.0 | **4.92 / rep (`9.84 / host`)** | 0.410x | Verified OK |
 | **Wan2.2-T2V** | `vllm-omni` | BF16 | **CFG=2×U=2** | 480p (832x480) | 5.0s / 81f | 4 | 308.40 | **27.108** | 6777.0 | **2.22 / host** | 0.184x | Verified OK |
@@ -64,7 +64,10 @@ Single-host configurations below utilize **1 host = 4 physical `v5p` chips** (or
 | **Wan2.2-T2V** | `sglang` | BF16 | U=4 (4 chips) | 480p (832x480) | 5.0s / 81f | 4 | 84.17 | **33.088** | 8272.0 | **1.82 / host** | 0.151x | Verified OK |
 | **Wan2.2-T2V** | `sglang` | BF16 | U=4 (4 chips) | 480p (832x480) | 5.0s / 81f | 20 | - | **118.538** | 5926.9 | **0.51 / host** | 0.042x | Verified OK |
 | **Wan2.2-T2V** | `sglang` | BF16 | U=4 (4 chips) | 480p (832x480) | 5.0s / 81f | 40 | - | **226.198** | 5655.0 | **0.27 / host** | 0.022x | Verified OK |
+| **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | U=4 + AdaLN-Online | **768p 16:9 (1344x768)** | **5.0s** | 4 | 644.83 | **291.180** | 72165.8 | **0.206 / host** | 0.017x | Verified OK (`58.2 GB` HBM) |
+| **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | **U=4 (Precomputed AdaLN)** | **768p 16:9 (1344x768)** | **15.0s** | 4 | 1657.22 | **389.363** | 96400.2 | **0.154 / host** | **0.039x** | Verified OK (`70.3 GB` HBM — **#1 `v5p`!**) |
 | **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | U=4 + AdaLN-Online | **768p 16:9 (1344x768)** | **15.0s** | 4 | 1521.69 | **458.692** | 113711.0 | **0.131 / host** | 0.033x | Verified OK (`70.3 GB` HBM) |
+| **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | U=4 + AdaLN-Online | **768p 16:9 (1344x768)** | **15.0s** | **25** | - | **952.301** | **37936.3** | **0.063 / host** | 0.016x | Verified OK (`72.0 GB` HBM) |
 
 ---
 
@@ -77,12 +80,13 @@ To satisfy a target production throughput of **30 Requests Per Minute (30 RPM)**
 | **LTX-2.5 (T2VA)** | 544p 5s 121f (8-step) | `2 × USP=2` / host | **17.30** | 30.0 | **2 hosts** | **8 chips** | `2x2x2` (`v5p-8`) or `v5p-16` |
 | **LTX-2.5 (I2VA / T2VA)** | 544p 5s 121f (8-step, min latency) | `1 × USP=4` / host | 12.97 | 30.0 | **3 hosts** | **12 chips** | `tpu-v5p-16-pool` (`2x2x4`) |
 | **LTX-2.5 (T2VA)** | 720p 5s 121f (8-step) | `2 × USP=2` / host | **9.84** | 30.0 | **4 hosts** | **16 chips** | `tpu-v5p-16-pool` (`2x2x4`) |
-| **LTX-2.5 (T2VA)** | 544p **10s 241f** (8-step) | `1 × USP=4` / host | **6.90** | 30.0 | **5 hosts** | **20 chips** | `tpu-v5p-32-pool` (`2x4x4`) |
+| **LTX-2.5 (T2VA)** | 544p **10s 241f** (8-step) | `1 × USP=4` / host | **6.91** | 30.0 | **5 hosts** | **20 chips** | `tpu-v5p-32-pool` (`2x4x4`) |
 | **Wan2.2-T2V-A14B** | 480p 5s 81f (4-step fast) | `1 × USP=4` / host | 2.27 | 30.0 | **14 hosts** | **56 chips** | `tpu-v5p-64-spot` (`4x4x4`) |
 | **Wan2.2-I2V-A14B** | 480p 5s 81f (4-step fast) | `1 × USP=4` / host | 2.18 | 30.0 | **14 hosts** | **56 chips** | `tpu-v5p-64-spot` (`4x4x4`) |
 | **Wan2.2-T2V-A14B** | 720p 5s 81f (4-step fast) | `CFG=2 × USP=2` | 1.36 | 30.0 | **23 hosts** | **92 chips** | `tpu-v5p-128-spot` (`4x4x8`) |
 | **Wan2.2-I2V-A14B** | 720p 5s 81f (4-step fast) | `1 × USP=4` / host | 1.00 | 30.0 | **30 hosts** | **120 chips** | `tpu-v5p-128-spot` (`4x4x8`) |
-| **MiniMax-H3 (FL2VA)** | 768p 15s (4-step, `v5p` BF16) | `1 × USP=4` / host | 0.131 | 30.0 | **229 hosts** | **916 chips** | *(Recommend `v7x`: **88 hosts / 352 chips** @ `0.342 RPM/host`)* |
+| **MiniMax-H3 (FL2VA)** | 768p 5s (4-step, `v5p` BF16) | `1 × USP=4` / host | **0.206** | 30.0 | **146 hosts** | **584 chips** | *(Or `v7x` for higher density)* |
+| **MiniMax-H3 (FL2VA)** | 768p 15s (4-step, `v5p` BF16) | `1 × USP=4` / host | **0.154** | 30.0 | **195 hosts** | **780 chips** | *(Recommend `v7x`: **88 hosts / 352 chips** @ `0.342 RPM/host`)* |
 
 ---
 
@@ -96,7 +100,7 @@ The cross-generation benchmark compares TPU `v7x` (`tpu-v7x-16-pool`) against TP
 |---|---|---|---|
 | **HBM Generation & Speed** | HBM3e (`~7.4 TB/s` package BW) | HBM2e (`~2.76 TB/s` chip BW) | Higher memory bandwidth on `v7x` accelerates memory-bound 3D DiT attention |
 | **HBM Capacity per Chip** | **`192 GiB`** (`96 GiB`/TensorCore) | **`95 GiB`** | `v7x` holds 33B-45B monolithic models with ample headroom; `v5p` fits `MiniMax-H3` at `70.3 GB` with encoder/VAE CPU offload |
-| **Compute Units per Chip** | 2 TensorCores (Native FP8 + BF16 MXU) | 1 Chip / 4 MXUs (BF16 MXU) | `2.61x` end-to-end speedup on `MiniMax-H3` 768p 15s (`175.5s` vs `458.7s`) |
+| **Compute Units per Chip** | 2 TensorCores (Native FP8 + BF16 MXU) | 1 Chip / 4 MXUs (BF16 MXU) | `2.22x` end-to-end speedup on `MiniMax-H3` 768p 15s (`175.5s` vs `389.4s`) |
 | **Interconnect (ICI)** | High-radix 3D optical torus | 3D Torus interconnect | High-efficiency intra-host Ulysses All-to-All across 4 chips |
 
 ### 4.2 Cross-Generation Empirical Video Serving Matrix
@@ -105,9 +109,11 @@ The cross-generation benchmark compares TPU `v7x` (`tpu-v7x-16-pool`) against TP
 |---|---|---|---:|---|---|---|---|---:|---:|---|
 | **High-Res Long Video (15s)** | `MiniMax-H3` | TPU `v7x-16` | 4 | `sglang` | FP8 (online) | Pallas FlashAttn (Offload) | 1344x768 (15s) | **175.51** | **0.342** | Verified OK |
 | **High-Res Long Video (15s)** | `MiniMax-H3` | TPU `v7x-16` | 4 | `sglang` | BF16 | Stock SDPA + AdaLN | 1344x768 (15s) | **177.99** | 0.337 | Verified OK |
-| **High-Res Long Video (15s)** | `MiniMax-H3` | **TPU `v5p-16`** | **4** | **`sglang`** | **BF16** | **XLA Fused SDPA + AdaLN-Online** | **1344x768 (15s)** | **458.69** | **0.131** | **Verified OK** |
+| **High-Res Long Video (15s)** | `MiniMax-H3` | **TPU `v5p-16`** | **4** | **`sglang`** | **BF16** | **XLA Fused SDPA (Precomputed AdaLN)** | **1344x768 (15s)** | **389.36** | **0.154** | **Verified OK** |
+| **High-Res Long Video (15s, 25-step)** | `MiniMax-H3` | **TPU `v5p-16`** | **4** | **`sglang`** | **BF16** | **XLA Fused SDPA + AdaLN-Online** | **1344x768 (15s)** | **952.30** | **0.063** | **Verified OK** |
+| **High-Res Short Video (5s)** | `MiniMax-H3` | **TPU `v5p-16`** | **4** | **`sglang`** | **BF16** | **XLA Fused SDPA + AdaLN-Online** | **1344x768 (5s)** | **291.18** | **0.206** | **Verified OK** |
 | **Real-Time Video+Audio (5s)** | `LTX-2.5` | TPU `v5p-32` | 4 | `vllm-omni` | BF16 | TPU SDPA (XLA Fused) | 960x544 (5s) | **4.62** | **12.97** *(17.30 @ 2×U2)* | Verified OK |
-| **Real-Time Video+Audio (10s)** | `LTX-2.5` | TPU `v5p-32` | 4 | `vllm-omni` | BF16 | TPU SDPA (XLA Fused) | 960x544 (10s) | **8.69** | **6.90** | Verified OK |
+| **Real-Time Video+Audio (10s)** | `LTX-2.5` | TPU `v5p-32` | 4 | `vllm-omni` | BF16 | TPU SDPA (XLA Fused) | 960x544 (10s) | **8.68** | **6.91** | Verified OK |
 | **Real-Time Video+Audio (5s)** | `LTX-2.5` | TPU `v5p-32` | 4 | `vllm-omni` | BF16 | TPU SDPA (XLA Fused) | 1280x704 (5s) | **7.38** | **8.13** *(9.84 @ 2×U2)* | Verified OK |
 | **Fast Cinematic T2V (5s)** | `Wan2.2-T2V` | TPU `v5p-32` | 4 | `vllm-omni` | BF16 | TPU SDPA (`CFG=2×U=2`) | 832x480 / 1280x720 (5s) | **27.11 / 44.22** | **2.22 / 1.36** | Verified OK |
 | **Fast Cinematic I2V (5s)** | `Wan2.2-I2V` | TPU `v5p-32` | 4 | `vllm-omni` | BF16 | TPU SDPA (`USP=4`) | 832x480 / 1280x720 (5s) | **28.05 / 59.81** | **2.18 / 1.00** | Verified OK |
