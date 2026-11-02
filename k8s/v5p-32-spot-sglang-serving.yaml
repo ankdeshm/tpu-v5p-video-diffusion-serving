@@ -5,7 +5,7 @@ metadata:
   namespace: default
   labels:
     app: v5p-32-spot-sglang-serving
-    workload: v5p-video-serving-priority-2-3-sglang
+    workload: v5p-video-serving-ltx25-3-sglang
 spec:
   backoffLimit: 1
   completions: 1
@@ -16,7 +16,7 @@ spec:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
       labels:
         app: v5p-32-spot-sglang-serving
-        workload: v5p-video-serving-priority-2-3-sglang
+        workload: v5p-video-serving-ltx25-3-sglang
         pod-idx: "0"
     spec:
       terminationGracePeriodSeconds: 10
@@ -85,7 +85,7 @@ metadata:
   namespace: default
   labels:
     app: v5p-32-spot-sglang-serving
-    workload: v5p-video-serving-priority-2-3-sglang
+    workload: v5p-video-serving-ltx25-3-sglang
 spec:
   backoffLimit: 1
   completions: 1
@@ -96,7 +96,7 @@ spec:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
       labels:
         app: v5p-32-spot-sglang-serving
-        workload: v5p-video-serving-priority-2-3-sglang
+        workload: v5p-video-serving-ltx25-3-sglang
         pod-idx: "1"
     spec:
       terminationGracePeriodSeconds: 10
@@ -165,7 +165,7 @@ metadata:
   namespace: default
   labels:
     app: v5p-32-spot-sglang-serving
-    workload: v5p-video-serving-priority-2-3-sglang
+    workload: v5p-video-serving-ltx25-3-sglang
 spec:
   backoffLimit: 1
   completions: 1
@@ -176,7 +176,7 @@ spec:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
       labels:
         app: v5p-32-spot-sglang-serving
-        workload: v5p-video-serving-priority-2-3-sglang
+        workload: v5p-video-serving-ltx25-3-sglang
         pod-idx: "2"
     spec:
       terminationGracePeriodSeconds: 10
@@ -245,7 +245,7 @@ metadata:
   namespace: default
   labels:
     app: v5p-32-spot-sglang-serving
-    workload: v5p-video-serving-priority-2-3-sglang
+    workload: v5p-video-serving-ltx25-3-sglang
 spec:
   backoffLimit: 1
   completions: 1
@@ -256,7 +256,7 @@ spec:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
       labels:
         app: v5p-32-spot-sglang-serving
-        workload: v5p-video-serving-priority-2-3-sglang
+        workload: v5p-video-serving-ltx25-3-sglang
         pod-idx: "3"
     spec:
       terminationGracePeriodSeconds: 10
@@ -325,7 +325,7 @@ metadata:
   namespace: default
   labels:
     app: v5p-32-spot-sglang-serving
-    workload: v5p-video-serving-priority-2-3-sglang
+    workload: v5p-video-serving-ltx25-3-sglang
 spec:
   backoffLimit: 1
   completions: 1
@@ -336,7 +336,7 @@ spec:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
       labels:
         app: v5p-32-spot-sglang-serving
-        workload: v5p-video-serving-priority-2-3-sglang
+        workload: v5p-video-serving-ltx25-3-sglang
         pod-idx: "4"
     spec:
       terminationGracePeriodSeconds: 10
@@ -405,7 +405,7 @@ metadata:
   namespace: default
   labels:
     app: v5p-32-spot-sglang-serving
-    workload: v5p-video-serving-priority-2-3-sglang
+    workload: v5p-video-serving-ltx25-3-sglang
 spec:
   backoffLimit: 1
   completions: 1
@@ -416,7 +416,7 @@ spec:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
       labels:
         app: v5p-32-spot-sglang-serving
-        workload: v5p-video-serving-priority-2-3-sglang
+        workload: v5p-video-serving-ltx25-3-sglang
         pod-idx: "5"
     spec:
       terminationGracePeriodSeconds: 10

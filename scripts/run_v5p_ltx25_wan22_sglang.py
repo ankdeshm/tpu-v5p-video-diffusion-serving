@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Priority #2 & #3 (SGLang Engine): LTX-2.5 & Wan 2.2 (T2V-A14B / I2V-A14B) Serving Benchmark Suite on TPU v5p.
+"""LTX-2.5 & Wan 2.2 (SGLang Engine): LTX-2.5 & Wan 2.2 (T2V-A14B / I2V-A14B) Serving Benchmark Suite on TPU v5p.
 
 Runs across 6 Spot TPU v5p hosts in `tpu-v5p-32-pool` (topology `2x4x4`, 4 physical v5p chips =
 4 MegaCore PyTorch TPU devices / 380 GiB HBM2e / 440 GiB CPU RAM per host = 24 v5p chips across 6 hosts,
@@ -1420,7 +1420,7 @@ def main() -> None:
                 ).encode("utf-8"),
             )
             gcs_upload_bytes(args.gcs_bucket, f"{gcs_prefix}/ALL_DONE.txt", b"ok\n", content_type="text/plain")
-            log(0, "Priority #2 & #3 (SGLang Engine) TPU v5p-32 benchmark suite 100% COMPLETE!")
+            log(0, "LTX-2.5 & Wan 2.2 (SGLang Engine) TPU v5p-32 benchmark suite COMPLETE")
         else:
             t_h = time.time()
             while time.time() - t_h < 3600:

@@ -16,23 +16,23 @@
 
 ## 1. Executive Summary & Key Findings
 
-1. **Sub-5-Second & Sub-9-Second 10s Video+Audio Diffusion on TPU v5p (`LTX-2.5`):**
-   - Utilizing `vllm-omni` with 4 `v5p` chips (`USP=4`), **LTX-2.5 544p (960x544) 5s 121f** generated in **`4.624s` (I2VA, `12.97 RPM/host`)** and **`4.684s` (T2VA, `12.93 RPM/host`, `1.07x` real-time)**, while **10s 241f T2VA** completed in **`8.694s` warm median (`6.902 RPM/host`, `1.15x` real-time!)**.
-   - **2-Chip Sub-Host Packing (`USP=2` × 2 Replicas/Host):** A 2-chip `v5p` replica (`ltx25_omni_bf16_2chip_usp2`) rendered 544p 5s 121f T2VA in **`6.931s` (`8.648 RPM/replica`)**, delivering **`17.30 RPM` per 4-chip host (`+33.8%` higher host throughput than `USP=4`)** and reducing `30 RPM` fleet sizing to just **2 hosts (`8` `v5p` chips)**!
-   - **6-Host (`24`-Chip `DP=6`) Multi-Host Cluster Throughput:** Sustained **`85.6 RPM`** (`>114 RPM` scaled to 8-host `v5p-32`) on 544p 5s T2VA!
+1. **Video+Audio Diffusion on TPU v5p (`LTX-2.5`):**
+   - Using `vllm-omni` with 4 `v5p` chips (`USP=4`), **LTX-2.5 544p (960x544) 5s 121f** generated in **`4.624s` (I2VA, `12.97 RPM/host`)** and **`4.684s` (T2VA, `12.93 RPM/host`, `1.07x` real-time)**, while **10s 241f T2VA** completed in **`8.694s` warm median (`6.902 RPM/host`, `1.15x` real-time)**.
+   - **2-Chip Sub-Host Packing (`USP=2` × 2 Replicas/Host):** A 2-chip `v5p` replica (`ltx25_omni_bf16_2chip_usp2`) rendered 544p 5s 121f T2VA in **`6.931s` (`8.648 RPM/replica`)**, delivering **`17.30 RPM` per 4-chip host (`+33.8%` higher host throughput than `USP=4`)** and sizing `30 RPM` capacity at **2 hosts (`8` `v5p` chips)**.
+   - **6-Host (`24`-Chip `DP=6`) Multi-Host Cluster Throughput:** Sustained **`85.6 RPM`** (`~114 RPM` scaled to 8-host `v5p-32`) on 544p 5s T2VA.
 
 2. **Large-Model Video Diffusion (`Wan2.2-T2V-A14B` & `Wan2.2-I2V-A14B`):**
-   - **`CFG=2 × USP=2` Hybrid Parallelism (`vllm-omni`):** Outperformed pure `USP=4`, rendering **Wan2.2-T2V 480p 4-step in `27.108s` (`2.216 RPM/host`)** and **720p 4-step in `44.223s` (`1.357 RPM/host`)** (`200.56s` at 20-step).
+   - **`CFG=2 × USP=2` Hybrid Parallelism (`vllm-omni`):** Rendered **Wan2.2-T2V 480p 4-step in `27.108s` (`2.216 RPM/host`)** and **720p 4-step in `44.223s` (`1.357 RPM/host`)** (`200.56s` at 20-step).
    - **`Wan2.2-I2V-A14B` Image-to-Video (`USP=4`, `vllm-omni`):** Generated **480p 5s 81f (4-step) in `28.049s` (`2.184 RPM/host`)** (`164.01s` at 20-step) and **720p 5s 81f (4-step) in `59.813s` (`1.003 RPM/host`)** (`202.25s` at 20-step), plus 720p 10s 161f (`599.20s`) and 720p Portrait `720x1280` (`203.89s`).
-   - **`sglang-torchtpu`:** Generated Wan2.2-T2V 480p 4-step in **`33.09s` (`1.82 RPM/host`)** and excelled on deep 20-step (`118.54s`) and 40-step (`226.20s`) schedules.
+   - **`sglang-torchtpu`:** Generated Wan2.2-T2V 480p 4-step in **`33.09s` (`1.82 RPM/host`)**, 20-step in `118.54s`, and 40-step in `226.20s`.
 
-3. **Resident `MiniMax-H3` (`33.14B` Omni-Modal DiT, `144 GB` BF16) Unlocked & Accelerated on Single 4-Chip TPU `v5p` Host (`389.36s` 15s HD!):**
-   - With our Qwen3-VL / VDN / CPU AudioDecode patches and selective encoder/VAE CPU offload (`--dit-cpu-offload=false`), **`MiniMax-H3 (FL2VA)` ran 100% resident on a single 4-chip `v5p` host (`70.27 GB` peak HBM)**! Removing AdaLN-online recompute (`mh3_bf16_u4_sdpa`) accelerated **15-second `1344x768` (768p 16:9) video+audio (`i2v`, 4-step) from `458.69s` -> `389.363s` warm median (`0.154 RPM/host`, `+17.8%` faster, `11.13 MB` MP4 verified)** vs **`175.51s` (`0.342 RPM/host`)** on 4-chip TPU `v7x` (`2.22x` Ironwood speedup). In addition, **5-second `1344x768` (`4`-step)** completed in **`291.180s` (`0.206 RPM/host`, `58.19 GB` HBM)**, and **full `25`-step 15-second `1344x768` HD** completed in **`952.301s` (`37.94s/denoise-step`, `0.063 RPM/host`, `71.96 GB` HBM)**!
+3. **Resident `MiniMax-H3` (`33.14B` Omni-Modal DiT) on Single 4-Chip TPU `v5p` Host (`385.96s` 15s HD):**
+   - With Qwen3-VL / VDN / CPU AudioDecode patches and selective encoder/VAE CPU offload (`--dit-cpu-offload=false`), **`MiniMax-H3 (FL2VA)` ran resident on a single 4-chip `v5p` host (`70.27–74.60 GB` peak HBM)**. Tuning AdaLN reduced **15-second `1344x768` (768p 16:9) video+audio (`i2v`, 4-step) latency from `458.69s` to `385.96s`–`389.36s` warm median (`0.154–0.155 RPM/host`, `11.13 MB` MP4 verified)** compared to **`175.51s` (`0.342 RPM/host`)** on 4-chip TPU `v7x`. In addition, **5-second `1344x768` (`4`-step)** completed in **`291.180s` (`0.206 RPM/host`, `58.19 GB` HBM)**, and **`25`-step 15-second `1344x768` HD** completed in **`952.301s` (`37.94s/denoise-step`, `0.063 RPM/host`, `71.96 GB` HBM)**.
 
-4. **Critical Serving Fixes Discovered & Upstreamed:**
+4. **Runtime Fixes Implemented:**
    - **LTX-2.5 Sequence Parallel Auto-Padding:** Configured `auto_pad=True` in `SequenceParallelInput` to support non-divisible latent token counts (e.g. `31,110` tokens for `960x544` across `USP=4`).
    - **PyAV Audio Resampler Chunking:** Fixed PyAV `avcodec_send_frame()` `EINVAL` (`errno 22`) during stereo MP4 muxing via `av.AudioResampler` `1024`-sample AAC packet framing.
-   - **MiniMax-H3 Precomputed vs Online AdaLN & Int32/MRoPE TPU Lowering:** Applied 9 runtime patches enabling full `1344x768` 15s `FL2VA` execution inside `95 GiB` `v5p` HBM (`70.27 GB` peak), proving precomputed AdaLN (`mh3_bf16_u4_sdpa`, `389.36s`) fits cleanly alongside selective encoder/VAE offload and beats AdaLN-online (`458.69s`) by `69.3s` per clip.
+   - **MiniMax-H3 Precomputed vs Online AdaLN & Int32/MRoPE TPU Lowering:** Applied 9 runtime patches enabling `1344x768` 15s `FL2VA` execution inside `95 GiB` `v5p` HBM (`70.27 GB` peak), reducing latency from `458.69s` (online AdaLN `p1`) to `389.36s` (precomputed AdaLN) and `385.96s` (`p2`).
 
 ---
 
@@ -65,7 +65,7 @@ Single-host configurations below utilize **1 host = 4 physical `v5p` chips** (or
 | **Wan2.2-T2V** | `sglang` | BF16 | U=4 (4 chips) | 480p (832x480) | 5.0s / 81f | 20 | - | **118.538** | 5926.9 | **0.51 / host** | 0.042x | Verified OK |
 | **Wan2.2-T2V** | `sglang` | BF16 | U=4 (4 chips) | 480p (832x480) | 5.0s / 81f | 40 | - | **226.198** | 5655.0 | **0.27 / host** | 0.022x | Verified OK |
 | **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | U=4 + AdaLN-Online | **768p 16:9 (1344x768)** | **5.0s** | 4 | 644.83 | **291.180** | 72165.8 | **0.206 / host** | 0.017x | Verified OK (`58.2 GB` HBM) |
-| **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | **U=4 + Tuned AdaLN-Online (`p2`)** | **768p 16:9 (1344x768)** | **15.0s** | 4 | 1554.80 | **385.956** | 95498.5 | **0.155 / host** | **0.039x** | Verified OK (`74.6 GB` HBM — **#1 `v5p`!**) |
+| **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | **U=4 + Tuned AdaLN-Online (`p2`)** | **768p 16:9 (1344x768)** | **15.0s** | 4 | 1554.80 | **385.956** | 95498.5 | **0.155 / host** | **0.039x** | Verified OK (`74.6 GB` HBM) |
 | **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | U=4 (Precomputed AdaLN) | **768p 16:9 (1344x768)** | **15.0s** | 4 | 1657.22 | **389.363** | 96400.2 | **0.154 / host** | **0.039x** | Verified OK (`70.3 GB` HBM) |
 | **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | U=4 + AdaLN-Online (`p1`) | **768p 16:9 (1344x768)** | **15.0s** | 4 | 1521.69 | **458.692** | 113711.0 | **0.131 / host** | 0.033x | Verified OK (`70.3 GB` HBM) |
 | **MiniMax-H3 (FL2VA)** | `sglang` | BF16 | U=4 + AdaLN-Online | **768p 16:9 (1344x768)** | **15.0s** | **25** | - | **952.301** | **37936.3** | **0.063 / host** | 0.016x | Verified OK (`72.0 GB` HBM) |

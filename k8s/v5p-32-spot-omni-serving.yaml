@@ -5,7 +5,7 @@ metadata:
   namespace: default
   labels:
     app: v5p-32-spot-omni-serving
-    workload: v5p-video-serving-priority-2-3-omni
+    workload: v5p-video-serving-ltx25-3-omni
 spec:
   backoffLimit: 1
   completions: 1
@@ -16,7 +16,7 @@ spec:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
       labels:
         app: v5p-32-spot-omni-serving
-        workload: v5p-video-serving-priority-2-3-omni
+        workload: v5p-video-serving-ltx25-3-omni
         pod-idx: "0"
     spec:
       terminationGracePeriodSeconds: 10
@@ -85,7 +85,7 @@ metadata:
   namespace: default
   labels:
     app: v5p-32-spot-omni-serving
-    workload: v5p-video-serving-priority-2-3-omni
+    workload: v5p-video-serving-ltx25-3-omni
 spec:
   backoffLimit: 1
   completions: 1
@@ -96,7 +96,7 @@ spec:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
       labels:
         app: v5p-32-spot-omni-serving
-        workload: v5p-video-serving-priority-2-3-omni
+        workload: v5p-video-serving-ltx25-3-omni
         pod-idx: "1"
     spec:
       terminationGracePeriodSeconds: 10

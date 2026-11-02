@@ -5,7 +5,7 @@ metadata:
   namespace: default
   labels:
     app: v5p-32-spot-omni-serving-p2
-    workload: v5p-video-serving-priority-2-3-omni
+    workload: v5p-video-serving-ltx25-3-omni
 spec:
   completionMode: Indexed
   completions: 6
@@ -17,7 +17,7 @@ spec:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
       labels:
         app: v5p-32-spot-omni-serving-p2
-        workload: v5p-video-serving-priority-2-3-omni
+        workload: v5p-video-serving-ltx25-3-omni
     spec:
       terminationGracePeriodSeconds: 10
       restartPolicy: Never

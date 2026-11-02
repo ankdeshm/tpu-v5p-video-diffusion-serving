@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Priority #1: MiniMax-H3 & FastH3 (4-step VSA Distilled) Video+Audio Serving Benchmark Suite on TPU v5p.
+"""MiniMax-H3 & FastH3 (4-step VSA Distilled) Video+Audio Serving Benchmark Suite on TPU v5p.
 
 Runs across the 4 Spot TPU v5p hosts in `tpu-v5p-16-pool` (topology `2x2x4`, 4 physical v5p chips =
 4 MegaCore PyTorch TPU devices / 380 GiB HBM2e / 440 GiB CPU RAM per host =
@@ -1364,7 +1364,7 @@ def format_markdown_summary(
     cluster_rows: list[dict[str, Any]],
 ) -> str:
     lines = [
-        f"# Priority #1 — MiniMax-H3 & FastH3 Video+Audio Serving on TPU v5p (`{run_id}`)",
+        f"# MiniMax-H3 & FastH3 Video+Audio Serving on TPU v5p (`{run_id}`)",
         "",
         f"- **Updated (UTC):** `{utc_now()}`",
         "- **Cluster / Nodepool:** `tpu-v5p-cluster` / `tpu-v5p-16-pool` (`2x2x4`, `4` hosts × `4` physical `v5p` chips = `16` physical chips / `16` MegaCore devices / `1,520 GiB` HBM2e)",
@@ -1933,7 +1933,7 @@ def main() -> None:
                 )
 
             gcs_upload_bytes(args.gcs_bucket, f"{gcs_prefix}/ALL_DONE.txt", b"ok\n", content_type="text/plain")
-            log(0, "Priority #1 MiniMax-H3 & FastH3 TPU v5p benchmark suite 100% COMPLETE!")
+            log(0, "MiniMax-H3 & FastH3 TPU v5p benchmark suite COMPLETE")
         else:
             t_hold = time.time()
             while time.time() - t_hold < 7200:

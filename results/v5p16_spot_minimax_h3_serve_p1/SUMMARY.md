@@ -1,11 +1,11 @@
-# Priority #1 — MiniMax-H3 & FastH3 Video+Audio Serving on TPU v5p (`v5p16_spot_minimax_h3_serve_p1`)
+# MiniMax-H3 & FastH3 Video+Audio Serving on TPU v5p (`v5p16_spot_minimax_h3_serve_p1`)
 
 - **Updated (UTC):** `2026-11-01T02:46:47.793116+00:00`
 - **Cluster / Nodepool:** `tpu-v5p-cluster` / `tpu-v5p-16-pool` (`2x2x4`, `4` hosts × `4` physical `v5p` chips = `16` physical chips / `16` MegaCore devices / `1,520 GiB` HBM2e)
 - **Serving Engine:** `sglang-torchtpu` (`TpuOOTPlatform`, XLA Fused SDPA vs TPU v5p Pallas SplashAttention + Ulysses Sequence Parallelism, 24 fps H.264 + 32 kHz stereo AAC muxed `.mp4`)
 - **Registered Hosts:** `{"0": "v5p16-minimax-h3-p0-48l9q", "1": "v5p16-minimax-h3-p1-lgg6h", "2": "v5p16-minimax-h3-p2-jjmfb", "3": "v5p16-minimax-h3-p3-rmpzx"}`
 
-## 1. Single-Host (`4x TPU v5p Chips` = `4` MegaCore Devices / `380 GiB` HBM2e) Configuration & Input-Distribution Matrix
+## 1. Single-Host (`4x TPU v5p` Chips) Benchmark Matrix
 
 | Config | Model | Prec. | Chips | Attn Mode | Task & Input Spec | Canvas | Steps | Conc. | Cold Compile (s) | Warm Med E2E (s) | ms/step | Host RPM (vids/min) | Video-s / Wall-s | OK |
 |---|---|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -51,7 +51,7 @@
 | `fasth3_fp8_u4_sdpa` | `FastH3 (4-step VSA)` | `FP8 (online)` | 4 | `XLA Fused SDPA` | **512p 16:9 15s FastH3 (4-step)** (`t2va`) | `-` | 4 | 1 | 1800.125 | **-** | - | **0.00** | 0.00x | `0/3` |
 | `fasth3_fp8_u4_sdpa` | `FastH3 (4-step VSA)` | `FP8 (online)` | 4 | `XLA Fused SDPA` | **768p 16:9 15s FastH3 (4-step, c=2)** (`t2va`) | `-` | 4 | 2 | - | **-** | - | **0.00** | 0.00x | `0/4` |
 
-## 2. Full `v5p-16` Slice (`16x TPU v5p Chips` = `4×` Data-Parallel Replicas, `DP=4 × Ulysses=4`) Throughput & `30 RPM` Sizing
+## 2. Full `v5p-16` Slice (`DP=4 × Ulysses=4`) Throughput & Sizing
 
 | Cluster Config | Workload / Input Distribution | Steps | Concurrency | Wall (s) | Med E2E (s) | P90 E2E (s) | Slice RPM (vids/min) | Video-s / Wall-s | Slices for 30 RPM | OK |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|

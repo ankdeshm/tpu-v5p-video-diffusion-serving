@@ -5,7 +5,7 @@ metadata:
   namespace: default
   labels:
     app: v5p-16-spot-minimax-h3-serving
-    workload: v5p-video-serving-priority-1
+    workload: v5p-video-serving-minimax-h3
 spec:
   backoffLimit: 1
   completions: 1
@@ -16,7 +16,7 @@ spec:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
       labels:
         app: v5p-16-spot-minimax-h3-serving
-        workload: v5p-video-serving-priority-1
+        workload: v5p-video-serving-minimax-h3
         pod-idx: "0"
     spec:
       terminationGracePeriodSeconds: 10
@@ -84,7 +84,7 @@ metadata:
   namespace: default
   labels:
     app: v5p-16-spot-minimax-h3-serving
-    workload: v5p-video-serving-priority-1
+    workload: v5p-video-serving-minimax-h3
 spec:
   backoffLimit: 1
   completions: 1
@@ -95,7 +95,7 @@ spec:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
       labels:
         app: v5p-16-spot-minimax-h3-serving
-        workload: v5p-video-serving-priority-1
+        workload: v5p-video-serving-minimax-h3
         pod-idx: "1"
     spec:
       terminationGracePeriodSeconds: 10
@@ -163,7 +163,7 @@ metadata:
   namespace: default
   labels:
     app: v5p-16-spot-minimax-h3-serving
-    workload: v5p-video-serving-priority-1
+    workload: v5p-video-serving-minimax-h3
 spec:
   backoffLimit: 1
   completions: 1
@@ -174,7 +174,7 @@ spec:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
       labels:
         app: v5p-16-spot-minimax-h3-serving
-        workload: v5p-video-serving-priority-1
+        workload: v5p-video-serving-minimax-h3
         pod-idx: "2"
     spec:
       terminationGracePeriodSeconds: 10
@@ -242,7 +242,7 @@ metadata:
   namespace: default
   labels:
     app: v5p-16-spot-minimax-h3-serving
-    workload: v5p-video-serving-priority-1
+    workload: v5p-video-serving-minimax-h3
 spec:
   backoffLimit: 1
   completions: 1
@@ -253,7 +253,7 @@ spec:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
       labels:
         app: v5p-16-spot-minimax-h3-serving
-        workload: v5p-video-serving-priority-1
+        workload: v5p-video-serving-minimax-h3
         pod-idx: "3"
     spec:
       terminationGracePeriodSeconds: 10
